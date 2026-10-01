@@ -79,6 +79,23 @@ type btBlock struct {
 	Rlp             string
 	UncleHeaders    []*btHeader
 	BlockAccessList btBlockAccessList `json:"blockAccessList"`
+	// RlpDecoded carries an expected-invalid block's fields, which have no
+	// top-level copy; only its access list is read.
+	RlpDecoded *struct {
+		BlockAccessList btBlockAccessList `json:"blockAccessList"`
+	} `json:"rlp_decoded"`
+}
+
+// accessList returns the block's access list as a client would receive it:
+// the top-level field, or rlp_decoded's for an expected-invalid block.
+func (bb *btBlock) accessList() types.BlockAccessList {
+	if len(bb.BlockAccessList) > 0 {
+		return bb.BlockAccessList.toBAL()
+	}
+	if bb.RlpDecoded != nil {
+		return bb.RlpDecoded.BlockAccessList.toBAL()
+	}
+	return nil
 }
 
 // btBlockAccessList and related types for parsing block access list data from test JSON.
@@ -356,12 +373,8 @@ func (bt *BlockTest) insertBlocks(m *execmoduletester.ExecModuleTester) ([]btBlo
 				return nil, fmt.Errorf("block RLP decoding failed when expected to succeed: %w", err)
 			}
 		}
-		var bal types.BlockAccessList
-		if len(b.BlockAccessList) > 0 {
-			bal = b.BlockAccessList.toBAL()
-		}
 		// RLP decoding worked, try to insert into chain:
-		cb = types.NewBlockFromNetwork(cb.HeaderNoCopy(), cb.Body(), types.NewBlockAccessListSidecar(bal))
+		cb = types.NewBlockFromNetwork(cb.HeaderNoCopy(), cb.Body(), types.NewBlockAccessListSidecar(b.accessList()))
 		chain := &blockgen.ChainPack{Blocks: []*types.Block{cb}, Headers: []*types.Header{cb.Header()}, TopBlock: cb}
 		var previousHead *types.Header
 		if b.BlockHeader == nil {
