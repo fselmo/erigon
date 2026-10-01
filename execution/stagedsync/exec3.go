@@ -47,6 +47,7 @@ import (
 	"github.com/erigontech/erigon/execution/tests/chaos_monkey"
 	"github.com/erigontech/erigon/execution/tracing"
 	"github.com/erigontech/erigon/execution/types"
+	"github.com/erigontech/erigon/node/ethconfig"
 	"github.com/erigontech/erigon/node/shards"
 )
 
@@ -634,6 +635,22 @@ func (te *txExecutor) onBlockStart(ctx context.Context, block *types.Block) {
 	}
 }
 
+// reportExecutionPath tells the configured reporter, if any, how b runs.
+// Genesis is never executed and is not reported.
+func (te *txExecutor) reportExecutionPath(b *types.Block, path, reason string, accessList bool) {
+	report := te.cfg.syncCfg.ExecutionPathReporter
+	if report == nil || b.NumberU64() == 0 {
+		return
+	}
+	report(ethconfig.BlockExecutionPath{
+		Number:     b.NumberU64(),
+		Hash:       b.Hash(),
+		Path:       path,
+		Reason:     reason,
+		AccessList: accessList,
+	})
+}
+
 func blockAccessList(blockTx kv.Getter, block *types.Block, blockNum uint64) (types.BlockAccessList, error) {
 	bal := block.BlockAccessList()
 	if bal == nil && block.HeaderNoCopy().HasNonEmptyBAL() {
@@ -752,6 +769,11 @@ func (te *txExecutor) executeBlocks(ctx context.Context, startBlockNum uint64, m
 			}
 			if executionBAL == nil && !dbg.IgnoreBAL && te.cfg.chainConfig.IsAmsterdam(header.Time) && header.HasNonEmptyBAL() {
 				te.logger.Debug("executing block without a BAL", "blockNum", blockNum)
+			}
+			if te.cfg.syncCfg.ExecWorkerCount <= 1 {
+				te.reportExecutionPath(b, "sequential", "single-worker", executionBAL != nil)
+			} else {
+				te.reportExecutionPath(b, "parallel", "", executionBAL != nil)
 			}
 			if dbg.TraceBALFeed {
 				if executionBAL != nil {
