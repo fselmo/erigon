@@ -34,6 +34,7 @@ import (
 
 	"github.com/erigontech/erigon/common/log/v3"
 	"github.com/erigontech/erigon/execution/tests/testutil"
+	"github.com/erigontech/erigon/node/ethconfig"
 )
 
 var blockTestCommand = cli.Command{
@@ -42,6 +43,7 @@ var blockTestCommand = cli.Command{
 	Usage:     "Executes the given blockchain tests. Filenames can be fed via standard input (batch mode) or as an argument (one-off execution).",
 	ArgsUsage: "<path>",
 	Flags: []cli.Flag{
+		&BALReportFlag,
 		&DumpFlag,
 		&ExecSerialFlag,
 		&JSONOutputFlag,
@@ -71,9 +73,10 @@ func blockTestCmd(_ context.Context, ctx *cli.Command) error {
 		return err
 	}
 
+	reportPath := runnerExecutionPathReporter(ctx)
 	if len(path) != 0 {
 		collected := filter.filterFiles(collectFiles(path))
-		results, err := runBlockTestsParallel(ctx, collected, workers, filter)
+		results, err := runBlockTestsParallel(ctx, collected, workers, filter, reportPath)
 		if err != nil {
 			return err
 		}
@@ -87,7 +90,7 @@ func blockTestCmd(_ context.Context, ctx *cli.Command) error {
 		if len(fname) == 0 {
 			return nil
 		}
-		results, err := runBlockTest(ctx, fname, filter)
+		results, err := runBlockTest(ctx, fname, filter, reportPath)
 		if err != nil {
 			return err
 		}
@@ -103,9 +106,9 @@ type fileResult struct {
 	err     error
 }
 
-func runBlockTestsParallel(ctx *cli.Command, files []string, workers uint64, filter testFilter) ([]testResult, error) {
+func runBlockTestsParallel(ctx *cli.Command, files []string, workers uint64, filter testFilter, reportPath func(ethconfig.BlockExecutionPath)) ([]testResult, error) {
 	return runTestFilesParallel(files, workers, func(path string) ([]testResult, error) {
-		return runBlockTest(ctx, path, filter)
+		return runBlockTest(ctx, path, filter, reportPath)
 	})
 }
 
@@ -199,7 +202,7 @@ func collectFiles(path string) []string {
 	return out
 }
 
-func runBlockTest(ctx *cli.Command, fname string, filter testFilter) ([]testResult, error) {
+func runBlockTest(ctx *cli.Command, fname string, filter testFilter, reportPath func(ethconfig.BlockExecutionPath)) ([]testResult, error) {
 	src, err := os.ReadFile(fname)
 	if err != nil {
 		return nil, err
@@ -223,6 +226,7 @@ func runBlockTest(ctx *cli.Command, fname string, filter testFilter) ([]testResu
 		if ctx.Bool(ExecSerialFlag.Name) {
 			tests[name].ExecWorkers = 1
 		}
+		tests[name].ExecutionPathReporter = reportPath
 		result := &testResult{Name: name, Pass: true}
 		if err := tests[name].RunCLI(); err != nil {
 			result.Pass = false
