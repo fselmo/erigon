@@ -27,6 +27,8 @@ import (
 	"github.com/erigontech/erigon/execution/engineapi"
 	"github.com/erigontech/erigon/execution/engineapi/engine_block_downloader"
 	enginetypes "github.com/erigontech/erigon/execution/engineapi/engine_types"
+	"github.com/erigontech/erigon/execution/execmodule/chainreader"
+	"github.com/erigontech/erigon/execution/p2p"
 	"github.com/erigontech/erigon/node/ethconfig"
 )
 
@@ -76,11 +78,14 @@ func (et *EngineTest) RunCLI() error {
 	if err := et.validateGenesis(m); err != nil {
 		return err
 	}
+	// With no peers, a payload whose parent is unknown is answered SYNCING, as
+	// on an isolated node.
+	noPeers := p2p.NewBackwardBlockDownloader(m.Log, nil, nil, p2p.NewPeerTracker(m.Log, nil), m.Dirs.Tmp)
 	srv := engineapi.NewEngineServer(
 		m.Log,
 		m.ChainConfig,
 		m.ExecModule,
-		engine_block_downloader.NewEngineBlockDownloader(m.Ctx, m.Log, m.ExecModule, m.BlockReader, m.DB, m.ChainConfig, ethconfig.Defaults.Sync, nil),
+		engine_block_downloader.NewEngineBlockDownloader(m.Ctx, m.Log, m.ExecModule, m.BlockReader, m.DB, m.ChainConfig, ethconfig.Defaults.Sync, noPeers),
 		false, /* caplin */
 		false, /* internalCL */
 		false, /* proposing */
@@ -95,8 +100,9 @@ func (et *EngineTest) RunCLI() error {
 			return fmt.Errorf("forkchoice update to genesis: %w", err)
 		}
 	}
+	chain := chainreader.NewChainReaderEth1(m.ChainConfig, m.ExecModule, 0)
 	for i, payload := range et.payloads {
-		if err := payload.send(m.Ctx, srv); err != nil {
+		if err := payload.send(m.Ctx, srv, chain); err != nil {
 			return fmt.Errorf("payload %d: %w", i, err)
 		}
 	}
@@ -112,7 +118,7 @@ func (et *EngineTest) RunCLI() error {
 
 // send delivers the payload through engine_newPayloadV<n> and, if it is valid,
 // makes it the head through engine_forkchoiceUpdatedV<n>.
-func (p *enginePayload) send(ctx context.Context, srv *engineapi.EngineServer) error {
+func (p *enginePayload) send(ctx context.Context, srv *engineapi.EngineServer, chain chainreader.ChainReaderWriterEth1) error {
 	var (
 		payload           enginetypes.ExecutionPayload
 		blobHashes        []common.Hash
@@ -129,7 +135,8 @@ func (p *enginePayload) send(ctx context.Context, srv *engineapi.EngineServer) e
 		}
 	}
 
-	status, err := retrySyncing(ctx, func() (*enginetypes.PayloadStatus, error) {
+	parentUnknown := func() bool { return chain.GetHeaderByHash(ctx, payload.ParentHash) == nil }
+	status, err := retrySyncing(ctx, parentUnknown, func() (*enginetypes.PayloadStatus, error) {
 		switch p.NewPayloadVersion {
 		case "1":
 			return srv.NewPayloadV1(ctx, &payload)
@@ -154,7 +161,7 @@ func (p *enginePayload) send(ctx context.Context, srv *engineapi.EngineServer) e
 	case status.Status != enginetypes.ValidStatus && expectInvalid:
 		return nil
 	case status.Status != enginetypes.ValidStatus:
-		return fmt.Errorf("payload status %s: %s", status.Status, status.ValidationError.Error())
+		return statusError("payload", status)
 	case expectInvalid:
 		return fmt.Errorf("payload is valid, expected %s%s", p.ValidationError, p.ErrorCode)
 	}
@@ -163,7 +170,7 @@ func (p *enginePayload) send(ctx context.Context, srv *engineapi.EngineServer) e
 
 func forkchoiceUpdated(ctx context.Context, srv *engineapi.EngineServer, head common.Hash, version string) error {
 	state := &enginetypes.ForkChoiceState{HeadHash: head}
-	status, err := retrySyncing(ctx, func() (*enginetypes.PayloadStatus, error) {
+	status, err := retrySyncing(ctx, nil, func() (*enginetypes.PayloadStatus, error) {
 		var (
 			r   *enginetypes.ForkChoiceUpdatedResponse
 			err error
@@ -189,18 +196,29 @@ func forkchoiceUpdated(ctx context.Context, srv *engineapi.EngineServer, head co
 		return err
 	}
 	if status.Status != enginetypes.ValidStatus {
-		return fmt.Errorf("forkchoice status %s: %s", status.Status, status.ValidationError.Error())
+		return statusError("forkchoice", status)
 	}
 	return nil
 }
 
+func statusError(call string, status *enginetypes.PayloadStatus) error {
+	if status.ValidationError == nil || status.ValidationError.Error() == nil {
+		return fmt.Errorf("%s status %s", call, status.Status)
+	}
+	return fmt.Errorf("%s status %s: %w", call, status.Status, status.ValidationError.Error())
+}
+
 // retrySyncing repeats call while the server answers SYNCING, which it does
-// while the execution module is still busy with the previous request.
-func retrySyncing(ctx context.Context, call func() (*enginetypes.PayloadStatus, error)) (*enginetypes.PayloadStatus, error) {
+// while the execution module is still busy with the previous request. A
+// SYNCING answer is final once stuck, if given, reports true.
+func retrySyncing(ctx context.Context, stuck func() bool, call func() (*enginetypes.PayloadStatus, error)) (*enginetypes.PayloadStatus, error) {
 	for {
 		status, err := call()
 		if err != nil || status.Status != enginetypes.SyncingStatus {
 			return status, err
+		}
+		if stuck != nil && stuck() {
+			return status, nil
 		}
 		select {
 		case <-ctx.Done():
