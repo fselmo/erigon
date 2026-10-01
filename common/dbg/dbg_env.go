@@ -31,6 +31,17 @@ import (
 
 const ErigonEnvPrefix = "ERIGON_"
 
+// envLog writes env overrides to stderr. They are read at package init, before
+// a binary installs its own log handler, and the root logger's default handler
+// writes to stdout, where these lines would precede a tool's own output.
+var envLog = newEnvLogger()
+
+func newEnvLogger() log.Logger {
+	l := log.New()
+	l.SetHandler(log.LvlFilterHandler(log.LvlWarn, log.StderrHandler))
+	return l
+}
+
 // envLookup - auto-add ERIGON_ prefix to any declared ENV variable
 //
 //	User - can add/skip ERIGON_ prefix
@@ -38,15 +49,15 @@ const ErigonEnvPrefix = "ERIGON_"
 func envLookup(envVarName string) (string, bool) {
 	if v, ok := os.LookupEnv(envVarName); ok {
 		if strings.HasPrefix(envVarName, ErigonEnvPrefix) {
-			log.Warn("[env]", envVarName, v)
+			envLog.Warn("[env]", envVarName, v)
 		} else {
-			log.Warn("[env] use ERIGON_ prefix for env", "var", envVarName)
-			log.Warn("[env]", envVarName, v)
+			envLog.Warn("[env] use ERIGON_ prefix for env", "var", envVarName)
+			envLog.Warn("[env]", envVarName, v)
 		}
 		return v, true
 	}
 	if v, ok := os.LookupEnv(ErigonEnvPrefix + envVarName); ok {
-		log.Warn("[env]", ErigonEnvPrefix+envVarName, v)
+		envLog.Warn("[env]", ErigonEnvPrefix+envVarName, v)
 		return v, true
 	}
 	return "", false
