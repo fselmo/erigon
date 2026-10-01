@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"sync"
 	"testing"
 
 	"github.com/holiman/uint256"
@@ -61,6 +62,9 @@ type BlockTest struct {
 	ExecWorkers int
 	// ExecutionPathReporter, when set, is told how each block is executed.
 	ExecutionPathReporter func(ethconfig.BlockExecutionPath)
+	// droppedAccessLists holds the hashes of blocks whose delivered access
+	// list was dropped, so their reports read "bad-access-list".
+	droppedAccessLists sync.Map
 }
 
 // UnmarshalJSON implements json.Unmarshaler interface.
@@ -84,6 +88,36 @@ type btBlock struct {
 	Rlp             string
 	UncleHeaders    []*btHeader
 	BlockAccessList btBlockAccessList `json:"blockAccessList"`
+	// RlpDecoded carries an expected-invalid block's fields, which have no
+	// top-level copy; only its access list is read.
+	RlpDecoded *struct {
+		BlockAccessList btBlockAccessList `json:"blockAccessList"`
+	} `json:"rlp_decoded"`
+}
+
+// accessList returns the block's access list as a client would receive it:
+// the top-level field, or rlp_decoded's for an expected-invalid block. Like
+// the p2p fetcher's validateBALResponse, it drops a list whose hash differs
+// from the header's, so the block runs without one and is judged on its
+// header; dropped reports that. A list the header commits to is attached
+// even if malformed, and the block is then invalid.
+func (bb *btBlock) accessList(header *types.Header) (sidecar *types.BlockAccessListSidecar, dropped bool) {
+	list := bb.BlockAccessList
+	if len(list) == 0 && bb.RlpDecoded != nil {
+		list = bb.RlpDecoded.BlockAccessList
+	}
+	sidecar = types.NewBlockAccessListSidecar(list.toBAL())
+	if sidecar == nil {
+		return nil, false
+	}
+	if header.BlockAccessListHash == nil {
+		return nil, true
+	}
+	hash, err := sidecar.Hash()
+	if err != nil || hash != *header.BlockAccessListHash {
+		return nil, true
+	}
+	return sidecar, false
 }
 
 // btBlockAccessList and related types for parsing block access list data from test JSON.
@@ -243,8 +277,13 @@ func (bt *BlockTest) newTester(tb testing.TB) (*execmoduletester.ExecModuleTeste
 	if bt.ExecWorkers > 0 {
 		mOpts = append(mOpts, execmoduletester.WithExecWorkers(bt.ExecWorkers))
 	}
-	if bt.ExecutionPathReporter != nil {
-		mOpts = append(mOpts, execmoduletester.WithExecutionPathReporter(bt.ExecutionPathReporter))
+	if report := bt.ExecutionPathReporter; report != nil {
+		mOpts = append(mOpts, execmoduletester.WithExecutionPathReporter(func(p ethconfig.BlockExecutionPath) {
+			if _, dropped := bt.droppedAccessLists.Load(p.Hash); dropped {
+				p.Reason = "bad-access-list"
+			}
+			report(p)
+		}))
 	}
 	return execmoduletester.New(tb, mOpts...), nil
 }
@@ -406,12 +445,12 @@ func (bt *BlockTest) insertBlocks(m *execmoduletester.ExecModuleTester) ([]btBlo
 				return nil, fmt.Errorf("block RLP decoding failed when expected to succeed: %w", err)
 			}
 		}
-		var bal types.BlockAccessList
-		if len(b.BlockAccessList) > 0 {
-			bal = b.BlockAccessList.toBAL()
-		}
 		// RLP decoding worked, try to insert into chain:
-		cb = types.NewBlockFromNetwork(cb.HeaderNoCopy(), cb.Body(), types.NewBlockAccessListSidecar(bal))
+		accessList, dropped := b.accessList(cb.HeaderNoCopy())
+		cb = types.NewBlockFromNetwork(cb.HeaderNoCopy(), cb.Body(), accessList)
+		if dropped {
+			bt.droppedAccessLists.Store(cb.Hash(), struct{}{})
+		}
 		chain := &blockgen.ChainPack{Blocks: []*types.Block{cb}, Headers: []*types.Header{cb.Header()}, TopBlock: cb}
 		var previousHead *types.Header
 		if b.BlockHeader == nil {

@@ -328,7 +328,8 @@ type BlockExecutionPath struct {
 	// Path is "parallel" or "sequential".
 	Path string
 	// Reason is "single-worker" when the block runs on one exec worker, as
-	// under --exec.serial, and empty for "parallel".
+	// under --exec.serial, and empty for "parallel". The block test runner
+	// sets "bad-access-list" when it dropped the block's list.
 	Reason string
 	// AccessList is true when the block's access list seeds the parallel
 	// scheduler; without it, transactions are scheduled optimistically.

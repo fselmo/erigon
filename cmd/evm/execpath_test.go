@@ -54,6 +54,12 @@ func TestExecutionPathReporterLines(t *testing.T) {
 			want:       `{"event":"balExecution","block":12,"hash":"0x0000000000000000000000000000000000000000000000000000000000abcdef","path":"sequential","reason":"disabled","scheduler":"bal"}`,
 		},
 		{
+			name:       "dropped access list under --exec.serial",
+			execSerial: true,
+			path:       ethconfig.BlockExecutionPath{Number: 12, Hash: hash, Path: "sequential", Reason: "bad-access-list"},
+			want:       `{"event":"balExecution","block":12,"hash":"0x0000000000000000000000000000000000000000000000000000000000abcdef","path":"sequential","reason":"bad-access-list","scheduler":"optimistic"}`,
+		},
+		{
 			name: "single worker by configuration",
 			path: ethconfig.BlockExecutionPath{Number: 12, Hash: hash, Path: "sequential", Reason: "single-worker", AccessList: true},
 			want: `{"event":"balExecution","block":12,"hash":"0x0000000000000000000000000000000000000000000000000000000000abcdef","path":"sequential","reason":"single-worker","scheduler":"bal"}`,
