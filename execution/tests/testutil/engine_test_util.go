@@ -1,0 +1,211 @@
+// Copyright 2026 The Erigon Authors
+// This file is part of Erigon.
+//
+// Erigon is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Erigon is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with Erigon. If not, see <http://www.gnu.org/licenses/>.
+
+package testutil
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/erigontech/erigon/common"
+	"github.com/erigontech/erigon/common/hexutil"
+	"github.com/erigontech/erigon/execution/engineapi"
+	"github.com/erigontech/erigon/execution/engineapi/engine_block_downloader"
+	enginetypes "github.com/erigontech/erigon/execution/engineapi/engine_types"
+	"github.com/erigontech/erigon/node/ethconfig"
+)
+
+// An EngineTest checks a chain delivered as engine API calls: a
+// blockchain_tests_engine fixture. Genesis, post-state checks and runner
+// settings are shared with BlockTest.
+type EngineTest struct {
+	BlockTest
+	payloads []enginePayload
+}
+
+type enginePayload struct {
+	Params            []json.RawMessage `json:"params"`
+	NewPayloadVersion string            `json:"newPayloadVersion"`
+	FcuVersion        string            `json:"forkchoiceUpdatedVersion"`
+	// ValidationError and ErrorCode mark a payload the client must reject,
+	// with an invalid status or an error from the call.
+	ValidationError string `json:"validationError"`
+	ErrorCode       string `json:"errorCode"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler interface.
+func (et *EngineTest) UnmarshalJSON(in []byte) error {
+	if err := et.BlockTest.UnmarshalJSON(in); err != nil {
+		return err
+	}
+	var fixture struct {
+		Payloads []enginePayload `json:"engineNewPayloads"`
+	}
+	if err := json.Unmarshal(in, &fixture); err != nil {
+		return err
+	}
+	et.payloads = fixture.Payloads
+	return nil
+}
+
+// RunCLI runs the test on a fresh execution module. Each payload and
+// forkchoice update is a direct call to an engine server built on that
+// module, at the version the fixture names; nothing listens on a port.
+func (et *EngineTest) RunCLI() error {
+	m, err := et.newTester(nil)
+	if err != nil {
+		return err
+	}
+	defer m.Close()
+
+	if err := et.validateGenesis(m); err != nil {
+		return err
+	}
+	srv := engineapi.NewEngineServer(
+		m.Log,
+		m.ChainConfig,
+		m.ExecModule,
+		engine_block_downloader.NewEngineBlockDownloader(m.Ctx, m.Log, m.ExecModule, m.BlockReader, m.DB, m.ChainConfig, ethconfig.Defaults.Sync, nil),
+		false, /* caplin */
+		false, /* internalCL */
+		false, /* proposing */
+		true,  /* consuming */
+		nil,   /* txPool */
+		nil,   /* blobGetter */
+		ethconfig.Defaults.FcuTimeout,
+		ethconfig.Defaults.MaxReorgDepth,
+	)
+	if len(et.payloads) > 0 {
+		if err := forkchoiceUpdated(m.Ctx, srv, m.Genesis.Hash(), et.payloads[0].FcuVersion); err != nil {
+			return fmt.Errorf("forkchoice update to genesis: %w", err)
+		}
+	}
+	for i, payload := range et.payloads {
+		if err := payload.send(m.Ctx, srv); err != nil {
+			return fmt.Errorf("payload %d: %w", i, err)
+		}
+	}
+	m.ExecModule.WaitIdle(m.Ctx)
+
+	tx, err := m.DB.BeginTemporalRo(m.Ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	return et.validateHeadAndPostState(m, tx)
+}
+
+// send delivers the payload through engine_newPayloadV<n> and, if it is valid,
+// makes it the head through engine_forkchoiceUpdatedV<n>.
+func (p *enginePayload) send(ctx context.Context, srv *engineapi.EngineServer) error {
+	var (
+		payload           enginetypes.ExecutionPayload
+		blobHashes        []common.Hash
+		parentBeaconRoot  common.Hash
+		executionRequests []hexutil.Bytes
+	)
+	targets := []any{&payload, &blobHashes, &parentBeaconRoot, &executionRequests}
+	for i, param := range p.Params {
+		if i >= len(targets) {
+			return fmt.Errorf("unexpected param %d", i)
+		}
+		if err := json.Unmarshal(param, targets[i]); err != nil {
+			return fmt.Errorf("decode param %d: %w", i, err)
+		}
+	}
+
+	status, err := retrySyncing(ctx, func() (*enginetypes.PayloadStatus, error) {
+		switch p.NewPayloadVersion {
+		case "1":
+			return srv.NewPayloadV1(ctx, &payload)
+		case "2":
+			return srv.NewPayloadV2(ctx, &payload)
+		case "3":
+			return srv.NewPayloadV3(ctx, &payload, blobHashes, &parentBeaconRoot)
+		case "4":
+			return srv.NewPayloadV4(ctx, &payload, blobHashes, &parentBeaconRoot, executionRequests)
+		case "5":
+			return srv.NewPayloadV5(ctx, &payload, blobHashes, &parentBeaconRoot, executionRequests)
+		default:
+			return nil, fmt.Errorf("unsupported newPayload version %q", p.NewPayloadVersion)
+		}
+	})
+	expectInvalid := p.ValidationError != "" || p.ErrorCode != ""
+	switch {
+	case err != nil && expectInvalid:
+		return nil
+	case err != nil:
+		return err
+	case status.Status != enginetypes.ValidStatus && expectInvalid:
+		return nil
+	case status.Status != enginetypes.ValidStatus:
+		return fmt.Errorf("payload status %s: %s", status.Status, status.ValidationError.Error())
+	case expectInvalid:
+		return fmt.Errorf("payload is valid, expected %s%s", p.ValidationError, p.ErrorCode)
+	}
+	return forkchoiceUpdated(ctx, srv, payload.BlockHash, p.FcuVersion)
+}
+
+func forkchoiceUpdated(ctx context.Context, srv *engineapi.EngineServer, head common.Hash, version string) error {
+	state := &enginetypes.ForkChoiceState{HeadHash: head}
+	status, err := retrySyncing(ctx, func() (*enginetypes.PayloadStatus, error) {
+		var (
+			r   *enginetypes.ForkChoiceUpdatedResponse
+			err error
+		)
+		switch version {
+		case "1":
+			r, err = srv.ForkchoiceUpdatedV1(ctx, state, nil)
+		case "2":
+			r, err = srv.ForkchoiceUpdatedV2(ctx, state, nil)
+		case "3":
+			r, err = srv.ForkchoiceUpdatedV3(ctx, state, nil)
+		case "4":
+			r, err = srv.ForkchoiceUpdatedV4(ctx, state, nil, nil)
+		default:
+			return nil, fmt.Errorf("unsupported forkchoiceUpdated version %q", version)
+		}
+		if err != nil {
+			return nil, err
+		}
+		return r.PayloadStatus, nil
+	})
+	if err != nil {
+		return err
+	}
+	if status.Status != enginetypes.ValidStatus {
+		return fmt.Errorf("forkchoice status %s: %s", status.Status, status.ValidationError.Error())
+	}
+	return nil
+}
+
+// retrySyncing repeats call while the server answers SYNCING, which it does
+// while the execution module is still busy with the previous request.
+func retrySyncing(ctx context.Context, call func() (*enginetypes.PayloadStatus, error)) (*enginetypes.PayloadStatus, error) {
+	for {
+		status, err := call()
+		if err != nil || status.Status != enginetypes.SyncingStatus {
+			return status, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}

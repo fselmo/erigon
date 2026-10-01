@@ -258,15 +258,8 @@ func (bt *BlockTest) newTester(tb testing.TB) (*execmoduletester.ExecModuleTeste
 // runChecks imports the test blocks into m and validates the result against the
 // fixture (genesis, head block hash, post-state, imported headers).
 func (bt *BlockTest) runChecks(m *execmoduletester.ExecModuleTester) error {
-	bt.br = m.BlockReader
-	// import pre accounts & construct test genesis block & state root
-	genesisHash := m.Genesis.Hash()
-	if genesisHash != bt.json.Genesis.Hash {
-		return fmt.Errorf("genesis block hash doesn't match test: computed=%x, test=%x", genesisHash[:6], bt.json.Genesis.Hash[:6])
-	}
-	genesisRoot := m.Genesis.Root()
-	if genesisRoot != bt.json.Genesis.StateRoot {
-		return fmt.Errorf("genesis block state root does not match test: computed=%x, test=%x", genesisRoot[:6], bt.json.Genesis.StateRoot[:6])
+	if err := bt.validateGenesis(m); err != nil {
+		return err
 	}
 
 	validBlocks, err := bt.insertBlocks(m)
@@ -280,6 +273,30 @@ func (bt *BlockTest) runChecks(m *execmoduletester.ExecModuleTester) error {
 	}
 	defer tx.Rollback()
 
+	if err := bt.validateHeadAndPostState(m, tx); err != nil {
+		return err
+	}
+	return bt.validateImportedHeaders(tx, validBlocks, m)
+}
+
+// validateGenesis checks the genesis m built from the test against the test's
+// genesis header.
+func (bt *BlockTest) validateGenesis(m *execmoduletester.ExecModuleTester) error {
+	bt.br = m.BlockReader
+	genesisHash := m.Genesis.Hash()
+	if genesisHash != bt.json.Genesis.Hash {
+		return fmt.Errorf("genesis block hash doesn't match test: computed=%x, test=%x", genesisHash[:6], bt.json.Genesis.Hash[:6])
+	}
+	genesisRoot := m.Genesis.Root()
+	if genesisRoot != bt.json.Genesis.StateRoot {
+		return fmt.Errorf("genesis block state root does not match test: computed=%x, test=%x", genesisRoot[:6], bt.json.Genesis.StateRoot[:6])
+	}
+	return nil
+}
+
+// validateHeadAndPostState checks the head block hash and the post-state
+// accounts against the test.
+func (bt *BlockTest) validateHeadAndPostState(m *execmoduletester.ExecModuleTester, tx kv.TemporalTx) error {
 	cmlast := rawdb.ReadHeadBlockHash(tx)
 	if common.Hash(bt.json.BestBlock) != cmlast {
 		return fmt.Errorf("last block hash validation mismatch: want: %x, have: %x", bt.json.BestBlock, cmlast)
@@ -288,8 +305,7 @@ func (bt *BlockTest) runChecks(m *execmoduletester.ExecModuleTester) error {
 	if err := bt.validatePostState(newDB); err != nil {
 		return fmt.Errorf("post state validation failed: %w", err)
 	}
-
-	return bt.validateImportedHeaders(tx, validBlocks, m)
+	return nil
 }
 
 // RunWithTester runs the block test and returns the ExecModuleTester it built.
