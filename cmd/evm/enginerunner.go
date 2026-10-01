@@ -68,7 +68,7 @@ func engineTestCmd(_ context.Context, ctx *cli.Command) error {
 		return err
 	}
 
-	reportPath := executionPathReporter(ctx.Bool(ExecSerialFlag.Name))
+	reportPath := executionPathReporter(os.Stderr, ctx.Bool(ExecSerialFlag.Name))
 	files := filter.filterFiles(collectFiles(path))
 	results, err := runTestFilesParallel(files, workers, func(fname string) ([]testResult, error) {
 		return runEngineTest(ctx, fname, filter, reportPath)
