@@ -18,7 +18,7 @@ package main
 
 import (
 	"encoding/json"
-	"os"
+	"io"
 	"sync"
 
 	"github.com/erigontech/erigon/common"
@@ -38,9 +38,9 @@ type executionPathLine struct {
 }
 
 // executionPathReporter returns a reporter that writes each executed block's
-// path to stderr as one JSON line. With --exec.serial on, the single worker
-// is the switch's doing, so its reason reads "disabled".
-func executionPathReporter(execSerial bool) func(ethconfig.BlockExecutionPath) {
+// path to w as one JSON line. With --exec.serial on, the single worker is the
+// switch's doing, so its reason reads "disabled".
+func executionPathReporter(w io.Writer, execSerial bool) func(ethconfig.BlockExecutionPath) {
 	var mu sync.Mutex
 	return func(p ethconfig.BlockExecutionPath) {
 		line := executionPathLine{
@@ -65,6 +65,6 @@ func executionPathReporter(execSerial bool) func(ethconfig.BlockExecutionPath) {
 		}
 		mu.Lock()
 		defer mu.Unlock()
-		_, _ = os.Stderr.Write(append(out, '\n'))
+		_, _ = w.Write(append(out, '\n'))
 	}
 }

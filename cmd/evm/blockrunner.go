@@ -73,7 +73,7 @@ func blockTestCmd(_ context.Context, ctx *cli.Command) error {
 		return err
 	}
 
-	reportPath := executionPathReporter(ctx.Bool(ExecSerialFlag.Name))
+	reportPath := executionPathReporter(os.Stderr, ctx.Bool(ExecSerialFlag.Name))
 	if len(path) != 0 {
 		collected := filter.filterFiles(collectFiles(path))
 		results, err := runBlockTestsParallel(ctx, collected, workers, filter, reportPath)
