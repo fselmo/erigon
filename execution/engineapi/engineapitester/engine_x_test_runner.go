@@ -109,6 +109,14 @@ func WithWarmupKzgCtxOnInit(warmup bool) EngineXTestRunnerOption {
 	}
 }
 
+// WithEthConfigTweaker adjusts each tester's node config after the runner's
+// own settings are applied.
+func WithEthConfigTweaker(tweak func(*ethconfig.Config)) EngineXTestRunnerOption {
+	return func(r *EngineXTestRunner) {
+		r.ethConfigTweaker = tweak
+	}
+}
+
 type EngineXTestRunner struct {
 	ctx                context.Context
 	logger             log.Logger
@@ -117,6 +125,7 @@ type EngineXTestRunner struct {
 	testers            map[Fork]map[PreAllocHash]testerEntry
 	profileHook        RequestProfileHook
 	warmupKzgCtxOnInit bool
+	ethConfigTweaker   func(*ethconfig.Config)
 }
 
 // RequestProfileHook is invoked immediately before each engine API request the
@@ -467,6 +476,9 @@ func (extr *EngineXTestRunner) createTester(fork Fork, preAllocHash PreAllocHash
 		EthConfigTweaker: func(config *ethconfig.Config) {
 			config.MaxReorgDepth = 512
 			config.WarmupKzgCtxOnInit = extr.warmupKzgCtxOnInit
+			if extr.ethConfigTweaker != nil {
+				extr.ethConfigTweaker(config)
+			}
 		},
 		DisableTxPool: true,
 		DisableSentry: true,

@@ -211,6 +211,7 @@ func init() {
 		&disasmCommand,
 		&runCommand,
 		&blockTestCommand,
+		&engineTestCommand,
 		&engineXTestCommand,
 		&zkevmTestCommand,
 		&stateTestCommand,
