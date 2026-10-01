@@ -29,6 +29,7 @@ import (
 
 	"github.com/erigontech/erigon/common/log/v3"
 	"github.com/erigontech/erigon/execution/engineapi/engineapitester"
+	"github.com/erigontech/erigon/node/ethconfig"
 )
 
 var engineTestCommand = cli.Command{
@@ -40,6 +41,7 @@ var engineTestCommand = cli.Command{
 		"receives the test's payloads and forkchoice updates at the versions the\n" +
 		"test names. Node datadirs live under $TMPDIR; see enginextest for tips.",
 	Flags: []cli.Flag{
+		&ExecSerialFlag,
 		&JSONOutputFlag,
 		&RunFlag,
 		&ExcludeFlag,
@@ -68,9 +70,16 @@ func engineTestCmd(ctx context.Context, cliCtx *cli.Command) error {
 		return err
 	}
 
+	var opts []engineapitester.EngineXTestRunnerOption
+	if cliCtx.Bool(ExecSerialFlag.Name) {
+		opts = append(opts, engineapitester.WithEthConfigTweaker(func(cfg *ethconfig.Config) {
+			cfg.Sync.ExecWorkerCount = 1
+		}))
+	}
+
 	files := filter.filterFiles(collectFiles(path))
 	results, err := runTestFilesParallel(files, workers, func(fname string) ([]testResult, error) {
-		return runEngineTest(ctx, fname, filter)
+		return runEngineTest(ctx, fname, filter, opts)
 	})
 	if err != nil {
 		return err
@@ -79,7 +88,7 @@ func engineTestCmd(ctx context.Context, cliCtx *cli.Command) error {
 	return nil
 }
 
-func runEngineTest(ctx context.Context, fname string, filter testFilter) ([]testResult, error) {
+func runEngineTest(ctx context.Context, fname string, filter testFilter, opts []engineapitester.EngineXTestRunnerOption) ([]testResult, error) {
 	src, err := os.ReadFile(fname)
 	if err != nil {
 		return nil, err
@@ -95,7 +104,7 @@ func runEngineTest(ctx context.Context, fname string, filter testFilter) ([]test
 			continue
 		}
 		result := testResult{Name: name, Pass: true}
-		if err := engineapitester.RunEngineTest(ctx, log.Root(), tests[name]); err != nil {
+		if err := engineapitester.RunEngineTest(ctx, log.Root(), tests[name], opts...); err != nil {
 			result.Pass = false
 			result.Error = err.Error()
 		}
