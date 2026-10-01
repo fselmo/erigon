@@ -37,6 +37,7 @@ var engineTestCommand = cli.Command{
 	Usage:     "Executes the given engine API tests (blockchain_tests_engine fixtures)",
 	ArgsUsage: "<path>",
 	Flags: []cli.Flag{
+		&ExecSerialFlag,
 		&JSONOutputFlag,
 		&RunFlag,
 		&ExcludeFlag,
@@ -90,6 +91,9 @@ func runEngineTest(ctx *cli.Command, fname string, filter testFilter) ([]testRes
 	for _, name := range slices.Sorted(maps.Keys(tests)) {
 		if !filter.includeCase(fname, name) {
 			continue
+		}
+		if ctx.Bool(ExecSerialFlag.Name) {
+			tests[name].ExecWorkers = 1
 		}
 		result := testResult{Name: name, Pass: true}
 		if err := tests[name].RunCLI(); err != nil {

@@ -152,6 +152,10 @@ var (
 		Value: 1,
 		Usage: "Number of workers to execute tests in parallel (must be >= 1)",
 	}
+	ExecSerialFlag = cli.BoolFlag{
+		Name:  "exec.serial",
+		Usage: "Execute every block on a single exec worker, as the node's --exec.serial does",
+	}
 	JSONOutputFlag = cli.BoolFlag{
 		Name:  "jsonout",
 		Usage: "Output results as JSON array instead of human-readable format",
