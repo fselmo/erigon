@@ -70,11 +70,15 @@ func engineTestCmd(ctx context.Context, cliCtx *cli.Command) error {
 		return err
 	}
 
-	var opts []engineapitester.EngineXTestRunnerOption
-	if cliCtx.Bool(ExecSerialFlag.Name) {
-		opts = append(opts, engineapitester.WithEthConfigTweaker(func(cfg *ethconfig.Config) {
-			cfg.Sync.ExecWorkerCount = 1
-		}))
+	execSerial := cliCtx.Bool(ExecSerialFlag.Name)
+	reportPath := executionPathReporter(execSerial)
+	opts := []engineapitester.EngineXTestRunnerOption{
+		engineapitester.WithEthConfigTweaker(func(cfg *ethconfig.Config) {
+			if execSerial {
+				cfg.Sync.ExecWorkerCount = 1
+			}
+			cfg.Sync.ExecutionPathReporter = reportPath
+		}),
 	}
 
 	files := filter.filterFiles(collectFiles(path))
