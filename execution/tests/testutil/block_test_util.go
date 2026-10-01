@@ -47,6 +47,7 @@ import (
 	"github.com/erigontech/erigon/execution/tests/testforks"
 	"github.com/erigontech/erigon/execution/types"
 	"github.com/erigontech/erigon/execution/types/accounts"
+	"github.com/erigontech/erigon/node/ethconfig"
 	"github.com/erigontech/erigon/node/rulesconfig"
 	"github.com/erigontech/erigon/p2p/protocols/eth"
 )
@@ -58,6 +59,8 @@ type BlockTest struct {
 	ExperimentalBAL bool
 	// ExecWorkers, when non-zero, sets the executor's worker count.
 	ExecWorkers int
+	// ExecutionPathReporter, when set, is told how each block is executed.
+	ExecutionPathReporter func(ethconfig.BlockExecutionPath)
 }
 
 // UnmarshalJSON implements json.Unmarshaler interface.
@@ -239,6 +242,9 @@ func (bt *BlockTest) newTester(tb testing.TB) (*execmoduletester.ExecModuleTeste
 	}
 	if bt.ExecWorkers > 0 {
 		mOpts = append(mOpts, execmoduletester.WithExecWorkers(bt.ExecWorkers))
+	}
+	if bt.ExecutionPathReporter != nil {
+		mOpts = append(mOpts, execmoduletester.WithExecutionPathReporter(bt.ExecutionPathReporter))
 	}
 	return execmoduletester.New(tb, mOpts...), nil
 }

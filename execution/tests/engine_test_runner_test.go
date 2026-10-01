@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/erigontech/erigon/execution/engineapi/engineapitester"
+	"github.com/erigontech/erigon/node/ethconfig"
 )
 
 const (
@@ -76,9 +77,10 @@ func TestEngineTest(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		workers int
+		path    string
 	}{
-		{"corrupted access list in parallel", 0},
-		{"corrupted access list on one worker", 1},
+		{"corrupted access list in parallel", 0, "parallel"},
+		{"corrupted access list on one worker", 1, "sequential"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			src, err := os.ReadFile(corruptedAccessListFixture)
@@ -87,8 +89,11 @@ func TestEngineTest(t *testing.T) {
 			require.NoError(t, json.Unmarshal(src, &tests))
 			require.Len(t, tests, 1)
 			for _, test := range tests {
+				var paths []string
 				test.ExecWorkers = tc.workers
+				test.ExecutionPathReporter = func(p ethconfig.BlockExecutionPath) { paths = append(paths, p.Path) }
 				require.NoError(t, test.RunCLI())
+				require.Equal(t, []string{tc.path}, paths)
 			}
 		})
 	}
