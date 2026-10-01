@@ -159,6 +159,10 @@ var (
 		Name:  "jsonout",
 		Usage: "Output results as JSON array instead of human-readable format",
 	}
+	JSONLOutputFlag = cli.BoolFlag{
+		Name:  "jsonl",
+		Usage: "Output results as JSON lines, one result object per line",
+	}
 )
 
 var stateTransitionCommand = cli.Command{
