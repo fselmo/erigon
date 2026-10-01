@@ -29,6 +29,7 @@ import (
 
 	"github.com/urfave/cli/v3"
 
+	_ "github.com/erigontech/erigon/cmd/evm/internal/stderrlog" // before any package logs
 	"github.com/erigontech/erigon/cmd/evm/internal/t8ntool"
 	"github.com/erigontech/erigon/cmd/utils/flags"
 	"github.com/erigontech/erigon/common/log/v3"
