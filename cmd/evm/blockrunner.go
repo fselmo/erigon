@@ -46,6 +46,7 @@ var blockTestCommand = cli.Command{
 		&DumpFlag,
 		&ExecSerialFlag,
 		&JSONOutputFlag,
+		&JSONLOutputFlag,
 		&RunFlag,
 		&ExcludeFlag,
 		&VerbosityFlag,

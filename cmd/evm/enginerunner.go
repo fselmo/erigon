@@ -43,6 +43,7 @@ var engineTestCommand = cli.Command{
 	Flags: []cli.Flag{
 		&ExecSerialFlag,
 		&JSONOutputFlag,
+		&JSONLOutputFlag,
 		&RunFlag,
 		&ExcludeFlag,
 		&VerbosityFlag,

@@ -75,6 +75,13 @@ func (r testResult) String() string {
 
 // report prints the after-test summary.
 func report(ctx *cli.Command, results []testResult) {
+	if ctx.Bool(JSONLOutputFlag.Name) {
+		enc := json.NewEncoder(os.Stdout)
+		for _, r := range results {
+			_ = enc.Encode(r) //nolint:errcheck,errchkjson
+		}
+		return
+	}
 	if ctx.Bool(JSONOutputFlag.Name) {
 		// Write directly to stdout via encoder to avoid the intermediate
 		// MarshalIndent -> string -> Println allocation chain.
