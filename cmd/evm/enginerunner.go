@@ -29,6 +29,7 @@ import (
 
 	"github.com/erigontech/erigon/common/log/v3"
 	"github.com/erigontech/erigon/execution/tests/testutil"
+	"github.com/erigontech/erigon/node/ethconfig"
 )
 
 var engineTestCommand = cli.Command{
@@ -66,9 +67,10 @@ func engineTestCmd(_ context.Context, ctx *cli.Command) error {
 		return err
 	}
 
+	reportPath := executionPathReporter(ctx.Bool(ExecSerialFlag.Name))
 	files := filter.filterFiles(collectFiles(path))
 	results, err := runTestFilesParallel(files, workers, func(fname string) ([]testResult, error) {
-		return runEngineTest(ctx, fname, filter)
+		return runEngineTest(ctx, fname, filter, reportPath)
 	})
 	if err != nil {
 		return err
@@ -77,7 +79,7 @@ func engineTestCmd(_ context.Context, ctx *cli.Command) error {
 	return nil
 }
 
-func runEngineTest(ctx *cli.Command, fname string, filter testFilter) ([]testResult, error) {
+func runEngineTest(ctx *cli.Command, fname string, filter testFilter, reportPath func(ethconfig.BlockExecutionPath)) ([]testResult, error) {
 	src, err := os.ReadFile(fname)
 	if err != nil {
 		return nil, err
@@ -95,6 +97,7 @@ func runEngineTest(ctx *cli.Command, fname string, filter testFilter) ([]testRes
 		if ctx.Bool(ExecSerialFlag.Name) {
 			tests[name].ExecWorkers = 1
 		}
+		tests[name].ExecutionPathReporter = reportPath
 		result := testResult{Name: name, Pass: true}
 		if err := tests[name].RunCLI(); err != nil {
 			result.Pass = false
