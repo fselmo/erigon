@@ -56,6 +56,8 @@ type BlockTest struct {
 	json            btJSON
 	br              dbservices.FullBlockReader
 	ExperimentalBAL bool
+	// ExecWorkers, when non-zero, sets the executor's worker count.
+	ExecWorkers int
 }
 
 // UnmarshalJSON implements json.Unmarshaler interface.
@@ -251,6 +253,9 @@ func (bt *BlockTest) newTester(tb testing.TB) (*execmoduletester.ExecModuleTeste
 	}
 	if bt.ExperimentalBAL {
 		mOpts = append(mOpts, execmoduletester.WithExperimentalBAL())
+	}
+	if bt.ExecWorkers > 0 {
+		mOpts = append(mOpts, execmoduletester.WithExecWorkers(bt.ExecWorkers))
 	}
 	return execmoduletester.New(tb, mOpts...), nil
 }
