@@ -62,9 +62,26 @@ type BlockTest struct {
 	ExecWorkers int
 	// ExecutionPathReporter, when set, is told how each block is executed.
 	ExecutionPathReporter func(ethconfig.BlockExecutionPath)
+	// Rejections lists the blocks the client rejected in the last run, in
+	// fixture order, each with the client's own error.
+	Rejections []Rejection
 	// droppedAccessLists holds the hashes of blocks whose delivered access
 	// list was dropped, so their reports read "bad-access-list".
 	droppedAccessLists sync.Map
+}
+
+// A Rejection is a block or payload the client rejected. Index is its
+// position in the fixture's blocks or engineNewPayloads, and Error is the
+// client's error, unmapped; checking it against the fixture's expected
+// exception is left to the consumer.
+type Rejection struct {
+	Index int          `json:"index"`
+	Hash  *common.Hash `json:"hash,omitempty"`
+	Error string       `json:"error"`
+}
+
+func (bt *BlockTest) reject(index int, hash *common.Hash, err string) {
+	bt.Rejections = append(bt.Rejections, Rejection{Index: index, Hash: hash, Error: err})
 }
 
 // UnmarshalJSON implements json.Unmarshaler interface.
@@ -435,10 +452,12 @@ See https://github.com/ethereum/tests/wiki/Blockchain-Tests-II
 */
 func (bt *BlockTest) insertBlocks(m *execmoduletester.ExecModuleTester) ([]btBlock, error) {
 	validBlocks := make([]btBlock, 0)
+	bt.Rejections = []Rejection{}
 	// insert the test blocks, which will execute all transaction
 	for bi, b := range bt.json.Blocks {
 		cb, err := b.decode()
 		if err != nil {
+			bt.reject(bi, nil, err.Error())
 			if b.BlockHeader == nil {
 				continue // OK - block is supposed to be invalid, continue with next block
 			} else {
@@ -461,6 +480,8 @@ func (bt *BlockTest) insertBlocks(m *execmoduletester.ExecModuleTester) ([]btBlo
 		}
 		err1 := m.InsertChain(chain)
 		if err1 != nil {
+			hash := cb.Hash()
+			bt.reject(bi, &hash, err1.Error())
 			if b.BlockHeader == nil {
 				continue // OK - block is supposed to be invalid, continue with next block
 			} else {
@@ -475,11 +496,13 @@ func (bt *BlockTest) insertBlocks(m *execmoduletester.ExecModuleTester) ([]btBlo
 			if isCanonical && !m.ChainConfig.IsByzantium(cb.NumberU64()) {
 				// Staged execution does not retain the per-transaction post-state roots needed
 				// for legacy receipt tries, so use the slower receipt generator to reconstruct them.
-				validReceipts, err := bt.validatePreByzantiumReceipts(m, cb)
+				receiptsErr, err := bt.validatePreByzantiumReceipts(m, cb)
 				if err != nil {
 					return nil, err
 				}
-				if !validReceipts {
+				if receiptsErr != nil {
+					hash := cb.Hash()
+					bt.reject(bi, &hash, receiptsErr.Error())
 					if err := restoreForkChoice(m, previousHead.Hash()); err != nil {
 						return nil, err
 					}
@@ -500,17 +523,23 @@ func (bt *BlockTest) insertBlocks(m *execmoduletester.ExecModuleTester) ([]btBlo
 	return validBlocks, nil
 }
 
-func (bt *BlockTest) validatePreByzantiumReceipts(m *execmoduletester.ExecModuleTester, block *types.Block) (bool, error) {
+// validatePreByzantiumReceipts returns, as invalid, the receipt root mismatch
+// in the words of erigon's own receipt check, or nil if the root matches.
+func (bt *BlockTest) validatePreByzantiumReceipts(m *execmoduletester.ExecModuleTester, block *types.Block) (invalid error, err error) {
 	tx, err := m.DB.BeginTemporalRo(m.Ctx)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	defer tx.Rollback()
 	receipts, err := m.ReceiptsReader.GetReceipts(m.Ctx, m.ChainConfig, tx, block, eth.ReceiptsOpts{})
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	return types.DeriveSha(receipts) == block.ReceiptHash(), nil
+	if receiptHash := types.DeriveSha(receipts); receiptHash != block.ReceiptHash() {
+		return fmt.Errorf("receiptHash mismatch: %x != %x, headerNum=%d, %x",
+			receiptHash, block.ReceiptHash(), block.NumberU64(), block.Hash()), nil
+	}
+	return nil, nil
 }
 
 func restoreForkChoice(m *execmoduletester.ExecModuleTester, headHash common.Hash) error {

@@ -107,6 +107,7 @@ func runEngineTest(ctx *cli.Command, fname string, filter testFilter, reportPath
 			result.Pass = false
 			result.Error = err.Error()
 		}
+		result.Rejections = rejections(tests[name].Rejections)
 		results = append(results, result)
 	}
 	return results, nil
