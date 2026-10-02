@@ -73,7 +73,11 @@ func blockTestCmd(_ context.Context, ctx *cli.Command) error {
 
 	reportPath := runnerExecutionPathReporter(ctx)
 	if ctx.Args().Present() {
-		collected := filter.filterFiles(collectArgFiles(ctx))
+		files, err := collectArgFiles(ctx)
+		if err != nil {
+			return err
+		}
+		collected := filter.filterFiles(files)
 		results, err := runBlockTestsParallel(ctx, collected, workers, filter, reportPath)
 		if err != nil {
 			return err
@@ -171,27 +175,50 @@ func runTestFilesParallel(files []string, workers uint64, runner func(string) ([
 }
 
 // collectArgFiles returns the fixture files under every path argument, in
-// argument order.
-func collectArgFiles(ctx *cli.Command) []string {
+// argument order. A path that does not exist or cannot be read is an error,
+// returned before any fixture runs.
+func collectArgFiles(ctx *cli.Command) ([]string, error) {
 	files := make([]string, 0, ctx.Args().Len())
 	for _, path := range ctx.Args().Slice() {
-		files = append(files, collectFiles(path)...)
+		found, err := jsonFiles(path)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, found...)
 	}
-	return files
+	for _, path := range files {
+		f, err := os.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		f.Close()
+	}
+	return files, nil
 }
 
 // collectFiles walks the given path and returns all JSON files.
 // If path is a file, it returns that file directly.
 func collectFiles(path string) []string {
-	info, err := os.Stat(path)
-	if err != nil {
+	if _, err := os.Stat(path); err != nil {
 		return nil
 	}
-
-	if !info.IsDir() {
-		return []string{path}
+	out, err := jsonFiles(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error walking path %s: %v\n", path, err)
 	}
+	return out
+}
 
+// jsonFiles returns path if it is a file, or the JSON files under it if it is
+// a directory, with the error that stopped the walk, if any.
+func jsonFiles(path string) ([]string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		return []string{path}, nil
+	}
 	// Pre-allocate with a reasonable estimate to avoid repeated slice growth
 	out := make([]string, 0, 256)
 	err = filepath.WalkDir(path, func(path string, d os.DirEntry, err error) error {
@@ -203,11 +230,7 @@ func collectFiles(path string) []string {
 		}
 		return nil
 	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error walking path %s: %v\n", path, err)
-	}
-
-	return out
+	return out, err
 }
 
 func runBlockTest(ctx *cli.Command, fname string, filter testFilter, reportPath func(ethconfig.BlockExecutionPath)) ([]testResult, error) {

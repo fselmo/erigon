@@ -68,7 +68,11 @@ func engineTestCmd(_ context.Context, ctx *cli.Command) error {
 	}
 
 	reportPath := runnerExecutionPathReporter(ctx)
-	files := filter.filterFiles(collectArgFiles(ctx))
+	files, err := collectArgFiles(ctx)
+	if err != nil {
+		return err
+	}
+	files = filter.filterFiles(files)
 	results, err := runTestFilesParallel(files, workers, func(fname string) ([]testResult, error) {
 		return runEngineTest(ctx, fname, filter, reportPath)
 	})

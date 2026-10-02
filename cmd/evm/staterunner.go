@@ -110,7 +110,11 @@ func stateTestCmd(_ context.Context, ctx *cli.Command) error {
 	}
 
 	if ctx.Args().Present() {
-		collected := filter.filterFiles(collectArgFiles(ctx))
+		files, err := collectArgFiles(ctx)
+		if err != nil {
+			return err
+		}
+		collected := filter.filterFiles(files)
 		results, err := runStateTestsParallel(ctx, cfg, traceOut, collected, workers, filter)
 		if err != nil {
 			return err
