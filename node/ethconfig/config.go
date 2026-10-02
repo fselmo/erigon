@@ -329,7 +329,8 @@ type BlockExecutionPath struct {
 	Path string
 	// Reason names the first condition that ruled out parallel execution:
 	// "serial-executor" (EXEC3_PARALLEL=false) or "single-worker" (one exec
-	// worker, as under --exec.serial). It is empty for "parallel".
+	// worker, as under --exec.serial). It is empty for "parallel". The block
+	// test runner sets "bad-access-list" when it dropped the block's list.
 	Reason string
 	// AccessList is true when the block's access list seeds the parallel
 	// scheduler; without it, transactions are scheduled optimistically.
