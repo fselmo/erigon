@@ -24,23 +24,45 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/erigontech/erigon/common/dbg"
 	"github.com/erigontech/erigon/execution/tests/testutil"
+	"github.com/erigontech/erigon/node/ethconfig"
 )
 
-// The two fixtures carry the same block. In wrong_list, the block is expected
-// invalid and only its rlp_decoded access list differs, so it is rejected only
-// if the block test delivers that list with the block.
-func TestBlockTestDeliversInvalidBlockAccessList(t *testing.T) {
+// The two fixtures carry the same valid block. In mismatched_list, one value
+// in its delivered access list is changed, so the list's hash differs from the
+// header's. The block test drops that list, as sync drops a peer's, and the
+// block imports and runs without it, reported as "bad-access-list".
+func TestBlockTestDropsMismatchedBlockAccessList(t *testing.T) {
 	if testing.Short() {
 		t.Skip("long-running test")
 	}
-	for _, name := range []string{"valid", "wrong_list"} {
-		t.Run(name, func(t *testing.T) {
-			src, err := os.ReadFile(filepath.Join("testdata", "delivered_access_list", name+".json"))
+	previousParallel := dbg.Exec3Parallel
+	dbg.Exec3Parallel = true
+	t.Cleanup(func() { dbg.Exec3Parallel = previousParallel })
+
+	for _, tc := range []struct {
+		name       string
+		accessList bool
+		reason     string
+	}{
+		{"valid", true, ""},
+		{"mismatched_list", false, "bad-access-list"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src, err := os.ReadFile(filepath.Join("testdata", "delivered_access_list", tc.name+".json"))
 			require.NoError(t, err)
 			var tests map[string]*testutil.BlockTest
 			require.NoError(t, json.Unmarshal(src, &tests))
-			require.NoError(t, tests[name].Run(t))
+			var paths []ethconfig.BlockExecutionPath
+			bt := tests[tc.name]
+			bt.ExecWorkers = 2
+			bt.ExecutionPathReporter = func(p ethconfig.BlockExecutionPath) { paths = append(paths, p) }
+			require.NoError(t, bt.Run(t))
+			require.Len(t, paths, 1)
+			require.Equal(t, "parallel", paths[0].Path)
+			require.Equal(t, tc.accessList, paths[0].AccessList)
+			require.Equal(t, tc.reason, paths[0].Reason)
 		})
 	}
 }
