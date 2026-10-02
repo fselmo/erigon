@@ -17,6 +17,7 @@
 package executiontests
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -81,4 +82,34 @@ func TestBlockTestDropsMismatchedBlockAccessList(t *testing.T) {
 		require.NoError(t, bt.Run(t))
 		require.Empty(t, *paths)
 	})
+}
+
+// A block rejected for a reason other than the one the fixture expects fails
+// the test, naming both reasons.
+func TestBlockTestChecksExpectedException(t *testing.T) {
+	if testing.Short() {
+		t.Skip("long-running test")
+	}
+	src, err := os.ReadFile(filepath.Join("testdata", "delivered_access_list", "invalid_list.json"))
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		expected string
+		err      string
+	}{
+		{"BlockException.INCORRECT_BLOCK_FORMAT", ""},
+		{"TransactionException.INSUFFICIENT_ACCOUNT_FUNDS|BlockException.INCORRECT_BLOCK_FORMAT", ""},
+		{"TransactionException.INSUFFICIENT_ACCOUNT_FUNDS", "expected TransactionException.INSUFFICIENT_ACCOUNT_FUNDS, got BlockException.INCORRECT_BLOCK_FORMAT"},
+	} {
+		t.Run(tc.expected, func(t *testing.T) {
+			edited := bytes.Replace(src, []byte(`"BlockException.INCORRECT_BLOCK_FORMAT"`), []byte(`"`+tc.expected+`"`), 1)
+			var tests map[string]*testutil.BlockTest
+			require.NoError(t, json.Unmarshal(edited, &tests))
+			err := tests["invalid_list"].Run(t)
+			if tc.err == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tc.err)
+			}
+		})
+	}
 }

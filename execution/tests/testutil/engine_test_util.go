@@ -19,7 +19,9 @@ package testutil
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/erigontech/erigon/common"
@@ -30,6 +32,7 @@ import (
 	"github.com/erigontech/erigon/execution/execmodule/chainreader"
 	"github.com/erigontech/erigon/execution/p2p"
 	"github.com/erigontech/erigon/node/ethconfig"
+	"github.com/erigontech/erigon/rpc"
 )
 
 // An EngineTest checks a chain delivered as engine API calls: a
@@ -154,12 +157,14 @@ func (p *enginePayload) send(ctx context.Context, srv *engineapi.EngineServer, c
 	})
 	expectInvalid := p.ValidationError != "" || p.ErrorCode != ""
 	switch {
+	case err != nil && p.ErrorCode != "":
+		return checkErrorCode(p.ErrorCode, err)
 	case err != nil && expectInvalid:
-		return nil
+		return checkException(p.ValidationError, err)
 	case err != nil:
 		return err
 	case status.Status != enginetypes.ValidStatus && expectInvalid:
-		return nil
+		return checkException(p.ValidationError, statusError("payload", status))
 	case status.Status != enginetypes.ValidStatus:
 		return statusError("payload", status)
 	case expectInvalid:
@@ -197,6 +202,20 @@ func forkchoiceUpdated(ctx context.Context, srv *engineapi.EngineServer, head co
 	}
 	if status.Status != enginetypes.ValidStatus {
 		return statusError("forkchoice", status)
+	}
+	return nil
+}
+
+// checkErrorCode checks that a call the fixture expects to fail with a
+// JSON-RPC error returned that error's code. As in EEST's consume, the code
+// alone decides; the payload's validation error is not checked.
+func checkErrorCode(expected string, err error) error {
+	var rpcErr rpc.Error
+	if !errors.As(err, &rpcErr) {
+		return fmt.Errorf("expected error code %s, got an error without a code: %w", expected, err)
+	}
+	if code := strconv.Itoa(rpcErr.ErrorCode()); code != expected {
+		return fmt.Errorf("expected error code %s, got %s: %w", expected, code, err)
 	}
 	return nil
 }

@@ -417,6 +417,8 @@ func (bt *BlockTest) insertBlocks(m *execmoduletester.ExecModuleTester) ([]btBlo
 		cb, err := b.decode()
 		if err != nil {
 			if b.BlockHeader == nil {
+				// No exception mapping names decoder errors, so a block that
+				// fails to decode counts as rejected without a reason check.
 				continue // OK - block is supposed to be invalid, continue with next block
 			} else {
 				return nil, fmt.Errorf("block RLP decoding failed when expected to succeed: %w", err)
@@ -439,6 +441,9 @@ func (bt *BlockTest) insertBlocks(m *execmoduletester.ExecModuleTester) ([]btBlo
 		err1 := m.InsertChain(chain)
 		if err1 != nil {
 			if b.BlockHeader == nil {
+				if err := checkException(b.ExpectException, err1); err != nil {
+					return nil, fmt.Errorf("block (index %d): %w", bi, err)
+				}
 				continue // OK - block is supposed to be invalid, continue with next block
 			} else {
 				return nil, fmt.Errorf("block #%v insertion into chain failed: %w", cb.Number(), err1)
