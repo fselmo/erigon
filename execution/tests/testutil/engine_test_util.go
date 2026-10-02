@@ -214,13 +214,27 @@ func forkchoiceUpdated(ctx context.Context, srv *engineapi.EngineServer, head co
 }
 
 // rpcErrorString renders err as a JSON-RPC client would see it: its code,
-// which is the server's default for an error without one, and its message.
+// which is the server's default for an error without one, its message and,
+// when it carries any, its data (a string as is, anything else as JSON).
 func rpcErrorString(err error) string {
 	code := rpc.ErrCodeDefault
 	if rpcErr, ok := errors.AsType[rpc.Error](err); ok {
 		code = rpcErr.ErrorCode()
 	}
-	return fmt.Sprintf("%d: %s", code, err.Error())
+	s := fmt.Sprintf("%d: %s", code, err.Error())
+	if dataErr, ok := errors.AsType[rpc.DataError](err); ok && dataErr.ErrorData() != nil {
+		switch data := dataErr.ErrorData().(type) {
+		case string:
+			s += ": " + data
+		default:
+			if encoded, jsonErr := json.Marshal(data); jsonErr == nil {
+				s += ": " + string(encoded)
+			} else {
+				s += fmt.Sprintf(": %v", data)
+			}
+		}
+	}
+	return s
 }
 
 // statusErrorString returns the client's validation error for a payload it did
