@@ -19,7 +19,10 @@ package main
 import (
 	"encoding/json"
 	"io"
+	"os"
 	"sync"
+
+	"github.com/urfave/cli/v3"
 
 	"github.com/erigontech/erigon/common"
 	"github.com/erigontech/erigon/node/ethconfig"
@@ -35,6 +38,15 @@ type executionPathLine struct {
 	// Scheduler is "bal" when the access list seeds the parallel executor and
 	// "optimistic" when it does not; absent for the legacy serial executor.
 	Scheduler string `json:"scheduler,omitempty"`
+}
+
+// runnerExecutionPathReporter returns the reporter the test runners install:
+// stderr lines with --bal-report, and nil without it, so nothing is reported.
+func runnerExecutionPathReporter(ctx *cli.Command) func(ethconfig.BlockExecutionPath) {
+	if !ctx.Bool(BALReportFlag.Name) {
+		return nil
+	}
+	return executionPathReporter(os.Stderr, ctx.Bool(ExecSerialFlag.Name))
 }
 
 // executionPathReporter returns a reporter that writes each executed block's

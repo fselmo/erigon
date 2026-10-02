@@ -151,6 +151,10 @@ var (
 		Value: 1,
 		Usage: "Number of workers to execute tests in parallel (must be >= 1)",
 	}
+	BALReportFlag = cli.BoolFlag{
+		Name:  "bal-report",
+		Usage: "Print how each block was executed (parallel or sequential, and why) as one JSON line per block on stderr",
+	}
 	ExecSerialFlag = cli.BoolFlag{
 		Name:  "exec.serial",
 		Usage: "Execute every block on a single exec worker, as the node's --exec.serial does. Access lists are still validated",
