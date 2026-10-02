@@ -36,7 +36,7 @@ var engineTestCommand = cli.Command{
 	Action:    engineTestCmd,
 	Name:      "enginetest",
 	Usage:     "Executes the given engine API tests (blockchain_tests_engine fixtures)",
-	ArgsUsage: "<path>",
+	ArgsUsage: "<path>...",
 	Flags: []cli.Flag{
 		&BALReportFlag,
 		&ExecSerialFlag,
@@ -56,8 +56,7 @@ func engineTestCmd(_ context.Context, ctx *cli.Command) error {
 		log.Root().SetHandler(log.LvlFilterHandler(log.LvlError, log.StderrHandler))
 	}
 
-	path := ctx.Args().First()
-	if path == "" {
+	if !ctx.Args().Present() {
 		return errors.New("path argument required")
 	}
 	workers := ctx.Uint64(WorkersFlag.Name)
@@ -70,7 +69,7 @@ func engineTestCmd(_ context.Context, ctx *cli.Command) error {
 	}
 
 	reportPath := runnerExecutionPathReporter(ctx)
-	files := filter.filterFiles(collectFiles(path))
+	files := filter.filterFiles(collectArgFiles(ctx))
 	results, err := runTestFilesParallel(files, workers, func(fname string) ([]testResult, error) {
 		return runEngineTest(ctx, fname, filter, reportPath)
 	})

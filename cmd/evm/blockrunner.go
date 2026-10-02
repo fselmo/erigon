@@ -40,8 +40,8 @@ import (
 var blockTestCommand = cli.Command{
 	Action:    blockTestCmd,
 	Name:      "blocktest",
-	Usage:     "Executes the given blockchain tests. Filenames can be fed via standard input (batch mode) or as an argument (one-off execution).",
-	ArgsUsage: "<path>",
+	Usage:     "Executes the given blockchain tests. Paths (files or directories) are given as arguments, or filenames fed via standard input (batch mode).",
+	ArgsUsage: "<path>...",
 	Flags: []cli.Flag{
 		&BALReportFlag,
 		&DumpFlag,
@@ -56,8 +56,6 @@ var blockTestCommand = cli.Command{
 }
 
 func blockTestCmd(_ context.Context, ctx *cli.Command) error {
-	path := ctx.Args().First()
-
 	// Set up logging
 	if ctx.Int(VerbosityFlag.Name) > 0 {
 		log.Root().SetHandler(log.LvlFilterHandler(log.Lvl(ctx.Int(VerbosityFlag.Name)), log.StderrHandler))
@@ -75,8 +73,8 @@ func blockTestCmd(_ context.Context, ctx *cli.Command) error {
 	}
 
 	reportPath := runnerExecutionPathReporter(ctx)
-	if len(path) != 0 {
-		collected := filter.filterFiles(collectFiles(path))
+	if ctx.Args().Present() {
+		collected := filter.filterFiles(collectArgFiles(ctx))
 		results, err := runBlockTestsParallel(ctx, collected, workers, filter, reportPath)
 		if err != nil {
 			return err
@@ -171,6 +169,16 @@ func runTestFilesParallel(files []string, workers uint64, runner func(string) ([
 		results = append(results, fr.results...)
 	}
 	return results, nil
+}
+
+// collectArgFiles returns the fixture files under every path argument, in
+// argument order.
+func collectArgFiles(ctx *cli.Command) []string {
+	files := make([]string, 0, ctx.Args().Len())
+	for _, path := range ctx.Args().Slice() {
+		files = append(files, collectFiles(path)...)
+	}
+	return files
 }
 
 // collectFiles walks the given path and returns all JSON files.
