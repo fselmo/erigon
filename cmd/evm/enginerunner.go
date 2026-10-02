@@ -39,6 +39,7 @@ var engineTestCommand = cli.Command{
 	ArgsUsage: "<path>...",
 	Flags: []cli.Flag{
 		&BALReportFlag,
+		&CheckExceptionsFlag,
 		&ExecSerialFlag,
 		&JSONOutputFlag,
 		&JSONLOutputFlag,
@@ -95,6 +96,7 @@ func runEngineTest(ctx *cli.Command, fname string, filter testFilter, reportPath
 		if !filter.includeCase(fname, name) {
 			continue
 		}
+		tests[name].CheckExceptions = ctx.Bool(CheckExceptionsFlag.Name)
 		if ctx.Bool(ExecSerialFlag.Name) {
 			tests[name].ExecWorkers = 1
 		}

@@ -18,6 +18,7 @@ package executiontests
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"testing"
 
@@ -73,22 +74,25 @@ func TestEngineTest(t *testing.T) {
 		require.ErrorContains(t, test.RunCLI(), "payload 1: payload status INVALID")
 	})
 
-	// The same block, expected invalid: it passes only when the fixture names
-	// the reason erigon rejects it for.
+	// The same block, expected invalid: with CheckExceptions it passes only
+	// when the fixture names the reason erigon rejects it for.
 	for _, tc := range []struct {
 		expected string
+		check    bool
 		err      string
 	}{
-		{"BlockException.INVALID_BLOCK_HASH", ""},
-		{"TransactionException.INSUFFICIENT_ACCOUNT_FUNDS", "payload 1: expected TransactionException.INSUFFICIENT_ACCOUNT_FUNDS, got BlockException.INVALID_BLOCK_HASH"},
+		{"BlockException.INVALID_BLOCK_HASH", true, ""},
+		{"TransactionException.INSUFFICIENT_ACCOUNT_FUNDS", true, "payload 1: expected TransactionException.INSUFFICIENT_ACCOUNT_FUNDS, got BlockException.INVALID_BLOCK_HASH"},
+		{"TransactionException.INSUFFICIENT_ACCOUNT_FUNDS", false, ""},
 	} {
-		t.Run("wrong access list expecting "+tc.expected, func(t *testing.T) {
+		t.Run(fmt.Sprintf("wrong access list expecting %s check=%v", tc.expected, tc.check), func(t *testing.T) {
 			test := loadEngineTest(t, func(fixture map[string]any) {
 				deliverBlock0AccessList(fixture)
 				payload(fixture, 1)["validationError"] = tc.expected
 				fixture["lastblockhash"] = payloadParams(fixture, 0)["blockHash"]
 				delete(fixture, "postState") // the fixture's is block 1's
 			})
+			test.CheckExceptions = tc.check
 			err := test.RunCLI()
 			if tc.err == "" {
 				require.NoError(t, err)
