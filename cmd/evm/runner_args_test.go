@@ -61,3 +61,30 @@ func TestRunnersRunEveryPathArgument(t *testing.T) {
 		})
 	}
 }
+
+// A path argument that does not exist fails the run before any fixture runs,
+// instead of being skipped.
+func TestRunnersRejectMissingPathArgument(t *testing.T) {
+	if testing.Short() {
+		t.Skip("too slow for testing.Short")
+	}
+	const missing = "../../execution/tests/testdata/does-not-exist.json"
+	for _, tc := range []struct {
+		command string
+		path    string
+	}{
+		{"blocktest", "../../execution/tests/testdata/delivered_access_list/valid.json"},
+		{"enginetest", "../../execution/tests/testdata/engine/bal_cross_block_ripemd160_state_leak.json"},
+		{"statetest", "../../execution/tests/test-corners/state/CallNonExistingAccount.json"},
+	} {
+		t.Run(tc.command, func(t *testing.T) {
+			tt := cmdtest.NewTestCmd(t, nil)
+			tt.Run("evm-test", tc.command, "--jsonout", tc.path, missing)
+			stdout := tt.Output()
+			tt.WaitExit()
+			require.NotEqual(t, 0, tt.ExitStatus())
+			require.Empty(t, stdout)
+			require.Contains(t, tt.StderrText(), "does-not-exist.json")
+		})
+	}
+}
