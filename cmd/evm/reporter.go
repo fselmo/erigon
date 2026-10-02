@@ -29,6 +29,7 @@ import (
 
 	"github.com/erigontech/erigon/common"
 	"github.com/erigontech/erigon/execution/state"
+	"github.com/erigontech/erigon/execution/tests/testutil"
 )
 
 const (
@@ -44,8 +45,21 @@ type testResult struct {
 	Root  *common.Hash `json:"stateRoot,omitempty"`
 	Fork  string       `json:"fork,omitempty"`
 	Error string       `json:"error"`
-	State *state.Dump  `json:"state,omitempty"`
-	Stats *execStats   `json:"benchStats,omitempty"`
+	// Rejections lists the blocks or payloads the client rejected, with its
+	// own errors, for a consumer to check against the expected exceptions.
+	// Only blocktest and enginetest set it.
+	Rejections *[]testutil.Rejection `json:"rejections,omitempty"`
+	State      *state.Dump           `json:"state,omitempty"`
+	Stats      *execStats            `json:"benchStats,omitempty"`
+}
+
+// rejections returns a test's rejections for its result, an empty list rather
+// than none when the client rejected nothing.
+func rejections(r []testutil.Rejection) *[]testutil.Rejection {
+	if r == nil {
+		r = []testutil.Rejection{}
+	}
+	return &r
 }
 
 func (r testResult) String() string {

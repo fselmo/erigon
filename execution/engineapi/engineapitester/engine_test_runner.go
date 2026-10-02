@@ -32,6 +32,7 @@ import (
 	"github.com/erigontech/erigon/execution/p2p"
 	"github.com/erigontech/erigon/execution/tests/testutil"
 	"github.com/erigontech/erigon/node/ethconfig"
+	"github.com/erigontech/erigon/rpc"
 )
 
 // An EngineTest checks a chain delivered as engine API calls: a
@@ -61,6 +62,7 @@ func (et *EngineTest) UnmarshalJSON(in []byte) error {
 // forkchoice update is a direct call to an engine server built on that
 // module, at the version the fixture names; nothing listens on a port.
 func (et *EngineTest) RunCLI() error {
+	et.Rejections = []testutil.Rejection{}
 	return et.RunCLIWith(et.deliver)
 }
 
@@ -91,7 +93,10 @@ func (et *EngineTest) deliver(m *execmoduletester.ExecModuleTester) error {
 	}
 	chain := chainreader.NewChainReaderEth1(m.ChainConfig, m.ExecModule, 0)
 	for i, payload := range et.payloads {
-		if err := sendPayload(m.Ctx, srv, chain, payload); err != nil {
+		reject := func(hash *common.Hash, err string) {
+			et.Rejections = append(et.Rejections, testutil.Rejection{Index: i, Hash: hash, Error: err})
+		}
+		if err := sendPayload(m.Ctx, srv, chain, payload, reject); err != nil {
 			return fmt.Errorf("payload %d: %w", i, err)
 		}
 	}
@@ -100,8 +105,9 @@ func (et *EngineTest) deliver(m *execmoduletester.ExecModuleTester) error {
 }
 
 // sendPayload delivers p through engine_newPayloadV<n> and, if it is valid,
-// makes it the head through engine_forkchoiceUpdatedV<n>.
-func sendPayload(ctx context.Context, srv *engineapi.EngineServer, chain chainreader.ChainReaderWriterEth1, p EngineXTestNewPayload) error {
+// makes it the head through engine_forkchoiceUpdatedV<n>. A payload the client
+// rejects, by status or by error, is passed to reject with the client's error.
+func sendPayload(ctx context.Context, srv *engineapi.EngineServer, chain chainreader.ChainReaderWriterEth1, p EngineXTestNewPayload, reject func(hash *common.Hash, err string)) error {
 	var (
 		payload           enginetypes.ExecutionPayload
 		blobHashes        []common.Hash
@@ -114,6 +120,7 @@ func sendPayload(ctx context.Context, srv *engineapi.EngineServer, chain chainre
 			return fmt.Errorf("unexpected param %d", i)
 		}
 		if err := json.Unmarshal(param, targets[i]); err != nil {
+			reject(nil, err.Error())
 			return fmt.Errorf("decode param %d: %w", i, err)
 		}
 	}
@@ -135,6 +142,12 @@ func sendPayload(ctx context.Context, srv *engineapi.EngineServer, chain chainre
 			return nil, fmt.Errorf("unsupported newPayload version %q", p.NewPayloadVersion)
 		}
 	})
+	switch {
+	case err != nil:
+		reject(&payload.BlockHash, rpcErrorString(err))
+	case status.Status != enginetypes.ValidStatus:
+		reject(&payload.BlockHash, statusErrorString(status))
+	}
 	expectInvalid := p.ValidationError != "" || p.ErrorCode != ""
 	switch {
 	case err != nil && expectInvalid:
@@ -182,6 +195,38 @@ func forkchoiceUpdated(ctx context.Context, srv *engineapi.EngineServer, head co
 		return statusError("forkchoice", status)
 	}
 	return nil
+}
+
+// rpcErrorString renders err as a JSON-RPC client would see it: its code,
+// its message and, when it carries any, its data (a string as is, anything
+// else as JSON). The code and data are the ones the RPC server would send.
+func rpcErrorString(err error) string {
+	jsonErr := rpc.NewJsonErrorFromErr(err).(interface {
+		rpc.Error
+		rpc.DataError
+	})
+	s := fmt.Sprintf("%d: %s", jsonErr.ErrorCode(), err.Error())
+	switch data := jsonErr.ErrorData().(type) {
+	case nil:
+	case string:
+		s += ": " + data
+	default:
+		if encoded, jsonErr := json.Marshal(data); jsonErr == nil {
+			s += ": " + string(encoded)
+		} else {
+			s += fmt.Sprintf(": %v", data)
+		}
+	}
+	return s
+}
+
+// statusErrorString returns the client's validation error for a payload it did
+// not accept, or the status itself when it gave none.
+func statusErrorString(status *enginetypes.PayloadStatus) string {
+	if status.ValidationError == nil || status.ValidationError.Error() == nil {
+		return string(status.Status)
+	}
+	return status.ValidationError.Error().Error()
 }
 
 func statusError(call string, status *enginetypes.PayloadStatus) error {
