@@ -75,7 +75,11 @@ func blockTestCmd(_ context.Context, ctx *cli.Command) error {
 
 	reportPath := runnerExecutionPathReporter(ctx)
 	if ctx.Args().Present() {
-		collected := filter.filterFiles(collectArgFiles(ctx))
+		files, err := collectArgFiles(ctx)
+		if err != nil {
+			return err
+		}
+		collected := filter.filterFiles(files)
 		results, err := runBlockTestsParallel(ctx, collected, workers, filter, reportPath)
 		if err != nil {
 			return err
@@ -173,13 +177,40 @@ func runTestFilesParallel(files []string, workers uint64, runner func(string) ([
 }
 
 // collectArgFiles returns the fixture files under every path argument, in
-// argument order.
-func collectArgFiles(ctx *cli.Command) []string {
+// argument order. A path that does not exist or cannot be read is an error,
+// returned before any fixture runs.
+func collectArgFiles(ctx *cli.Command) ([]string, error) {
 	files := make([]string, 0, ctx.Args().Len())
 	for _, path := range ctx.Args().Slice() {
-		files = append(files, collectFiles(path)...)
+		info, err := os.Stat(path)
+		if err != nil {
+			return nil, err
+		}
+		if !info.IsDir() {
+			files = append(files, path)
+			continue
+		}
+		err = filepath.WalkDir(path, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if !d.IsDir() && filepath.Ext(path) == ".json" {
+				files = append(files, path)
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
 	}
-	return files
+	for _, path := range files {
+		f, err := os.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		f.Close()
+	}
+	return files, nil
 }
 
 // collectFiles walks the given path and returns all JSON files.
