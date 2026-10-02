@@ -19,6 +19,7 @@ package testutil
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -30,6 +31,7 @@ import (
 	"github.com/erigontech/erigon/execution/execmodule/chainreader"
 	"github.com/erigontech/erigon/execution/p2p"
 	"github.com/erigontech/erigon/node/ethconfig"
+	"github.com/erigontech/erigon/rpc"
 )
 
 // An EngineTest checks a chain delivered as engine API calls: a
@@ -69,6 +71,7 @@ func (et *EngineTest) UnmarshalJSON(in []byte) error {
 // forkchoice update is a direct call to an engine server built on that
 // module, at the version the fixture names; nothing listens on a port.
 func (et *EngineTest) RunCLI() error {
+	et.Rejections = []Rejection{}
 	m, err := et.newTester(nil)
 	if err != nil {
 		return err
@@ -102,7 +105,8 @@ func (et *EngineTest) RunCLI() error {
 	}
 	chain := chainreader.NewChainReaderEth1(m.ChainConfig, m.ExecModule, 0)
 	for i, payload := range et.payloads {
-		if err := payload.send(m.Ctx, srv, chain); err != nil {
+		reject := func(hash *common.Hash, err string) { et.reject(i, hash, err) }
+		if err := payload.send(m.Ctx, srv, chain, reject); err != nil {
 			return fmt.Errorf("payload %d: %w", i, err)
 		}
 	}
@@ -117,8 +121,9 @@ func (et *EngineTest) RunCLI() error {
 }
 
 // send delivers the payload through engine_newPayloadV<n> and, if it is valid,
-// makes it the head through engine_forkchoiceUpdatedV<n>.
-func (p *enginePayload) send(ctx context.Context, srv *engineapi.EngineServer, chain chainreader.ChainReaderWriterEth1) error {
+// makes it the head through engine_forkchoiceUpdatedV<n>. A payload the client
+// rejects, by status or by error, is passed to reject with the client's error.
+func (p *enginePayload) send(ctx context.Context, srv *engineapi.EngineServer, chain chainreader.ChainReaderWriterEth1, reject func(hash *common.Hash, err string)) error {
 	var (
 		payload           enginetypes.ExecutionPayload
 		blobHashes        []common.Hash
@@ -131,6 +136,7 @@ func (p *enginePayload) send(ctx context.Context, srv *engineapi.EngineServer, c
 			return fmt.Errorf("unexpected param %d", i)
 		}
 		if err := json.Unmarshal(param, targets[i]); err != nil {
+			reject(nil, err.Error())
 			return fmt.Errorf("decode param %d: %w", i, err)
 		}
 	}
@@ -152,6 +158,12 @@ func (p *enginePayload) send(ctx context.Context, srv *engineapi.EngineServer, c
 			return nil, fmt.Errorf("unsupported newPayload version %q", p.NewPayloadVersion)
 		}
 	})
+	switch {
+	case err != nil:
+		reject(&payload.BlockHash, rpcErrorString(err))
+	case status.Status != enginetypes.ValidStatus:
+		reject(&payload.BlockHash, statusErrorString(status))
+	}
 	expectInvalid := p.ValidationError != "" || p.ErrorCode != ""
 	switch {
 	case err != nil && expectInvalid:
@@ -199,6 +211,25 @@ func forkchoiceUpdated(ctx context.Context, srv *engineapi.EngineServer, head co
 		return statusError("forkchoice", status)
 	}
 	return nil
+}
+
+// rpcErrorString renders err as a JSON-RPC client would see it: its code,
+// which is the server's default for an error without one, and its message.
+func rpcErrorString(err error) string {
+	code := rpc.ErrCodeDefault
+	if rpcErr, ok := errors.AsType[rpc.Error](err); ok {
+		code = rpcErr.ErrorCode()
+	}
+	return fmt.Sprintf("%d: %s", code, err.Error())
+}
+
+// statusErrorString returns the client's validation error for a payload it did
+// not accept, or the status itself when it gave none.
+func statusErrorString(status *enginetypes.PayloadStatus) string {
+	if status.ValidationError == nil || status.ValidationError.Error() == nil {
+		return string(status.Status)
+	}
+	return status.ValidationError.Error().Error()
 }
 
 func statusError(call string, status *enginetypes.PayloadStatus) error {
