@@ -19,6 +19,7 @@ package executiontests
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -84,8 +85,9 @@ func TestBlockTestDropsMismatchedBlockAccessList(t *testing.T) {
 	})
 }
 
-// A block rejected for a reason other than the one the fixture expects fails
-// the test, naming both reasons.
+// With CheckExceptions, a block rejected for a reason other than the one the
+// fixture expects fails the test, naming both reasons; without it, any
+// rejection passes.
 func TestBlockTestChecksExpectedException(t *testing.T) {
 	if testing.Short() {
 		t.Skip("long-running test")
@@ -94,16 +96,19 @@ func TestBlockTestChecksExpectedException(t *testing.T) {
 	require.NoError(t, err)
 	for _, tc := range []struct {
 		expected string
+		check    bool
 		err      string
 	}{
-		{"BlockException.INCORRECT_BLOCK_FORMAT", ""},
-		{"TransactionException.INSUFFICIENT_ACCOUNT_FUNDS|BlockException.INCORRECT_BLOCK_FORMAT", ""},
-		{"TransactionException.INSUFFICIENT_ACCOUNT_FUNDS", "expected TransactionException.INSUFFICIENT_ACCOUNT_FUNDS, got BlockException.INCORRECT_BLOCK_FORMAT"},
+		{"BlockException.INCORRECT_BLOCK_FORMAT", true, ""},
+		{"TransactionException.INSUFFICIENT_ACCOUNT_FUNDS|BlockException.INCORRECT_BLOCK_FORMAT", true, ""},
+		{"TransactionException.INSUFFICIENT_ACCOUNT_FUNDS", true, "expected TransactionException.INSUFFICIENT_ACCOUNT_FUNDS, got BlockException.INCORRECT_BLOCK_FORMAT"},
+		{"TransactionException.INSUFFICIENT_ACCOUNT_FUNDS", false, ""},
 	} {
-		t.Run(tc.expected, func(t *testing.T) {
+		t.Run(fmt.Sprintf("%s check=%v", tc.expected, tc.check), func(t *testing.T) {
 			edited := bytes.Replace(src, []byte(`"BlockException.INCORRECT_BLOCK_FORMAT"`), []byte(`"`+tc.expected+`"`), 1)
 			var tests map[string]*testutil.BlockTest
 			require.NoError(t, json.Unmarshal(edited, &tests))
+			tests["invalid_list"].CheckExceptions = tc.check
 			err := tests["invalid_list"].Run(t)
 			if tc.err == "" {
 				require.NoError(t, err)

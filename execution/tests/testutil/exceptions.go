@@ -28,7 +28,9 @@ import (
 // ErigonExceptionMapper, the mapping EEST's consume uses for erigon, from
 // packages/testing/src/execution_testing/client_clis/clis/erigon.py in
 // ethereum/execution-specs at e35787f5c67dd55c3a6874755b4b6a54bd6f255f
-// (forks/amsterdam); keep the two in sync.
+// (forks/amsterdam), with the pre-fork header patterns from its
+// fix/bal-pre-fork-header-exception branch (3d7916362c and 79ac7876e0 at the
+// time); keep the two in sync.
 var exceptionSubstrings = []struct{ name, substring string }{
 	{"TransactionException.SENDER_NOT_EOA", "sender not an eoa"},
 	{"TransactionException.INITCODE_SIZE_EXCEEDED", "max initcode size exceeded"},
@@ -70,11 +72,6 @@ var exceptionSubstrings = []struct{ name, substring string }{
 	{"BlockException.INVALID_LOG_BLOOM", "invalid bloom"},
 	{"BlockException.INCORRECT_BLOCK_FORMAT", "invalid block access list"},
 	{"BlockException.GAS_USED_OVERFLOW", "block gas used overflow"},
-
-	// Not in EEST's mapper yet: block import rejects a pre-Amsterdam header
-	// that carries a block access list hash before computing the hash the
-	// fixture expects to mismatch.
-	{"BlockException.INVALID_BLOCK_HASH", "unexpected bal hash"},
 }
 
 var exceptionPatterns = []struct {
@@ -86,7 +83,7 @@ var exceptionPatterns = []struct {
 	{"TransactionException.INVALID_SIGNATURE_VRS", regexp.MustCompile(`recovery failed`)},
 	{"BlockException.INVALID_BAL_HASH", regexp.MustCompile(`invalid block access list|block access list mismatch`)},
 	{"BlockException.INVALID_BLOCK_ACCESS_LIST", regexp.MustCompile(`invalid block access list|block access list mismatch`)},
-	{"BlockException.INCORRECT_BLOCK_FORMAT", regexp.MustCompile(`invalid block access list`)},
+	{"BlockException.INCORRECT_BLOCK_FORMAT", regexp.MustCompile(`invalid block access list|unexpected bal hash|invalid (excessBlobGas|blobGasUsed) before fork: have \S+, expected 'nil'`)},
 	{"BlockException.BLOCK_ACCESS_LIST_GAS_LIMIT_EXCEEDED", regexp.MustCompile(`block access list too large`)},
 	{"TransactionException.GAS_LIMIT_EXCEEDS_MAXIMUM", regexp.MustCompile(`gas limit too high`)},
 	{"BlockException.INCORRECT_BLOB_GAS_USED", regexp.MustCompile(`blobGasUsed by execution: \d+, in header: \d+`)},

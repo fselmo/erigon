@@ -105,7 +105,7 @@ func (et *EngineTest) RunCLI() error {
 	}
 	chain := chainreader.NewChainReaderEth1(m.ChainConfig, m.ExecModule, 0)
 	for i, payload := range et.payloads {
-		if err := payload.send(m.Ctx, srv, chain); err != nil {
+		if err := payload.send(m.Ctx, srv, chain, et.CheckExceptions); err != nil {
 			return fmt.Errorf("payload %d: %w", i, err)
 		}
 	}
@@ -121,7 +121,7 @@ func (et *EngineTest) RunCLI() error {
 
 // send delivers the payload through engine_newPayloadV<n> and, if it is valid,
 // makes it the head through engine_forkchoiceUpdatedV<n>.
-func (p *enginePayload) send(ctx context.Context, srv *engineapi.EngineServer, chain chainreader.ChainReaderWriterEth1) error {
+func (p *enginePayload) send(ctx context.Context, srv *engineapi.EngineServer, chain chainreader.ChainReaderWriterEth1, checkExceptions bool) error {
 	var (
 		payload           enginetypes.ExecutionPayload
 		blobHashes        []common.Hash
@@ -157,12 +157,16 @@ func (p *enginePayload) send(ctx context.Context, srv *engineapi.EngineServer, c
 	})
 	expectInvalid := p.ValidationError != "" || p.ErrorCode != ""
 	switch {
+	case err != nil && expectInvalid && !checkExceptions:
+		return nil
 	case err != nil && p.ErrorCode != "":
 		return checkErrorCode(p.ErrorCode, err)
 	case err != nil && expectInvalid:
 		return checkException(p.ValidationError, err)
 	case err != nil:
 		return err
+	case status.Status != enginetypes.ValidStatus && expectInvalid && !checkExceptions:
+		return nil
 	case status.Status != enginetypes.ValidStatus && expectInvalid:
 		return checkException(p.ValidationError, statusError("payload", status))
 	case status.Status != enginetypes.ValidStatus:
