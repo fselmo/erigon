@@ -98,8 +98,9 @@ type btBlock struct {
 // accessList returns the block's access list as a client would receive it:
 // the top-level field, or rlp_decoded's for an expected-invalid block. Like
 // the p2p fetcher's validateBALResponse, it drops a list whose hash differs
-// from the header's or that fails ValidateForBlock, so the block runs
-// without one and is judged on its header; dropped reports that.
+// from the header's, so the block runs without one and is judged on its
+// header; dropped reports that. A list the header commits to is attached
+// even if malformed, and the block is then invalid.
 func (bb *btBlock) accessList(header *types.Header) (sidecar *types.BlockAccessListSidecar, dropped bool) {
 	list := bb.BlockAccessList
 	if len(list) == 0 && bb.RlpDecoded != nil {
@@ -114,9 +115,6 @@ func (bb *btBlock) accessList(header *types.Header) (sidecar *types.BlockAccessL
 	}
 	hash, err := sidecar.Hash()
 	if err != nil || hash != *header.BlockAccessListHash {
-		return nil, true
-	}
-	if err := sidecar.ValidateForBlock(header.GasLimit); err != nil {
 		return nil, true
 	}
 	return sidecar, false

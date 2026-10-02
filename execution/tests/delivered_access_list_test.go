@@ -29,10 +29,24 @@ import (
 	"github.com/erigontech/erigon/node/ethconfig"
 )
 
-// The two fixtures carry the same valid block. In mismatched_list, one value
-// in its delivered access list is changed, so the list's hash differs from the
-// header's. The block test drops that list, as sync drops a peer's, and the
-// block imports and runs without it, reported as "bad-access-list".
+func loadDeliveredAccessListTest(t *testing.T, name string) (*testutil.BlockTest, *[]ethconfig.BlockExecutionPath) {
+	t.Helper()
+	src, err := os.ReadFile(filepath.Join("testdata", "delivered_access_list", name+".json"))
+	require.NoError(t, err)
+	var tests map[string]*testutil.BlockTest
+	require.NoError(t, json.Unmarshal(src, &tests))
+	var paths []ethconfig.BlockExecutionPath
+	bt := tests[name]
+	bt.ExecWorkers = 2
+	bt.ExecutionPathReporter = func(p ethconfig.BlockExecutionPath) { paths = append(paths, p) }
+	return bt, &paths
+}
+
+// The valid and mismatched_list fixtures carry the same valid block. In
+// mismatched_list, one value in its delivered access list is changed, so the
+// list's hash differs from the header's. The block test drops that list, as
+// sync drops a peer's, and the block imports and runs without it, reported as
+// "bad-access-list".
 func TestBlockTestDropsMismatchedBlockAccessList(t *testing.T) {
 	if testing.Short() {
 		t.Skip("long-running test")
@@ -50,19 +64,21 @@ func TestBlockTestDropsMismatchedBlockAccessList(t *testing.T) {
 		{"mismatched_list", false, "bad-access-list"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			src, err := os.ReadFile(filepath.Join("testdata", "delivered_access_list", tc.name+".json"))
-			require.NoError(t, err)
-			var tests map[string]*testutil.BlockTest
-			require.NoError(t, json.Unmarshal(src, &tests))
-			var paths []ethconfig.BlockExecutionPath
-			bt := tests[tc.name]
-			bt.ExecWorkers = 2
-			bt.ExecutionPathReporter = func(p ethconfig.BlockExecutionPath) { paths = append(paths, p) }
+			bt, paths := loadDeliveredAccessListTest(t, tc.name)
 			require.NoError(t, bt.Run(t))
-			require.Len(t, paths, 1)
-			require.Equal(t, "parallel", paths[0].Path)
-			require.Equal(t, tc.accessList, paths[0].AccessList)
-			require.Equal(t, tc.reason, paths[0].Reason)
+			require.Len(t, *paths, 1)
+			require.Equal(t, "parallel", (*paths)[0].Path)
+			require.Equal(t, tc.accessList, (*paths)[0].AccessList)
+			require.Equal(t, tc.reason, (*paths)[0].Reason)
 		})
 	}
+
+	// The header commits to a list whose accounts are out of order. The list
+	// matches, so it is attached, and the block is rejected before it runs; a
+	// dropped list would have let it run and print a line.
+	t.Run("invalid_list", func(t *testing.T) {
+		bt, paths := loadDeliveredAccessListTest(t, "invalid_list")
+		require.NoError(t, bt.Run(t))
+		require.Empty(t, *paths)
+	})
 }
