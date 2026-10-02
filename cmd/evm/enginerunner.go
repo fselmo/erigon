@@ -38,6 +38,7 @@ var engineTestCommand = cli.Command{
 	Usage:     "Executes the given engine API tests (blockchain_tests_engine fixtures)",
 	ArgsUsage: "<path>",
 	Flags: []cli.Flag{
+		&BALReportFlag,
 		&ExecSerialFlag,
 		&JSONOutputFlag,
 		&JSONLOutputFlag,
@@ -68,7 +69,7 @@ func engineTestCmd(_ context.Context, ctx *cli.Command) error {
 		return err
 	}
 
-	reportPath := executionPathReporter(os.Stderr, ctx.Bool(ExecSerialFlag.Name))
+	reportPath := runnerExecutionPathReporter(ctx)
 	files := filter.filterFiles(collectFiles(path))
 	results, err := runTestFilesParallel(files, workers, func(fname string) ([]testResult, error) {
 		return runEngineTest(ctx, fname, filter, reportPath)

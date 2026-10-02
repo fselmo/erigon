@@ -18,10 +18,13 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/erigontech/erigon/cmd/utils/cmdtest"
 	"github.com/erigontech/erigon/common"
 	"github.com/erigontech/erigon/node/ethconfig"
 )
@@ -66,5 +69,48 @@ func TestExecutionPathReporterLines(t *testing.T) {
 			executionPathReporter(&out, tc.execSerial)(tc.path)
 			require.Equal(t, tc.want+"\n", out.String())
 		})
+	}
+}
+
+// Both runners print a line per executed block with --bal-report, and none
+// without it.
+func TestBALReportFlag(t *testing.T) {
+	if testing.Short() {
+		t.Skip("too slow for testing.Short")
+	}
+	for _, runner := range []struct {
+		command string
+		fixture string
+	}{
+		{"blocktest", "../../execution/tests/testdata/delivered_access_list/valid.json"},
+		{"enginetest", "../../execution/tests/testdata/engine/bal_cross_block_ripemd160_state_leak.json"},
+	} {
+		for _, balReport := range []bool{true, false} {
+			args := []string{runner.command, "--jsonout"}
+			if balReport {
+				args = append(args, "--bal-report")
+			}
+			t.Run(fmt.Sprintf("%s bal-report=%v", runner.command, balReport), func(t *testing.T) {
+				tt := cmdtest.NewTestCmd(t, nil)
+				tt.Run("evm-test", append(args, runner.fixture)...)
+				stdout := tt.Output()
+				tt.WaitExit()
+				require.Equal(t, 0, tt.ExitStatus())
+
+				var results []testResult
+				require.NoError(t, json.Unmarshal(stdout, &results))
+				require.NotEmpty(t, results)
+				for _, r := range results {
+					require.True(t, r.Pass, r.Name)
+				}
+
+				lines := bytes.Count(tt.Stderr(), []byte(`"event":"balExecution"`))
+				if balReport {
+					require.Positive(t, lines)
+				} else {
+					require.Zero(t, lines)
+				}
+			})
+		}
 	}
 }

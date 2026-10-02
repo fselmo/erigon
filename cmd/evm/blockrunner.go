@@ -43,6 +43,7 @@ var blockTestCommand = cli.Command{
 	Usage:     "Executes the given blockchain tests. Filenames can be fed via standard input (batch mode) or as an argument (one-off execution).",
 	ArgsUsage: "<path>",
 	Flags: []cli.Flag{
+		&BALReportFlag,
 		&DumpFlag,
 		&ExecSerialFlag,
 		&JSONOutputFlag,
@@ -73,7 +74,7 @@ func blockTestCmd(_ context.Context, ctx *cli.Command) error {
 		return err
 	}
 
-	reportPath := executionPathReporter(os.Stderr, ctx.Bool(ExecSerialFlag.Name))
+	reportPath := runnerExecutionPathReporter(ctx)
 	if len(path) != 0 {
 		collected := filter.filterFiles(collectFiles(path))
 		results, err := runBlockTestsParallel(ctx, collected, workers, filter, reportPath)
