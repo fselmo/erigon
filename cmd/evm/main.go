@@ -155,10 +155,6 @@ var (
 		Name:  "bal-report",
 		Usage: "Print how each block was executed (parallel or sequential, and why) as one JSON line per block on stderr",
 	}
-	CheckExceptionsFlag = cli.BoolFlag{
-		Name:  "check-exceptions",
-		Usage: "Fail an expected-invalid block unless its error maps to one of the exceptions the fixture names, using the mapping execution-spec-tests' consume uses for erigon",
-	}
 	ExecSerialFlag = cli.BoolFlag{
 		Name:  "exec.serial",
 		Usage: "Execute every block on a single exec worker, as the node's --exec.serial does. Access lists are still validated",

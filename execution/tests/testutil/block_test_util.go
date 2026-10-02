@@ -58,9 +58,6 @@ type BlockTest struct {
 	json            btJSON
 	br              dbservices.FullBlockReader
 	ExperimentalBAL bool
-	// CheckExceptions, when set, fails an expected-invalid block that is
-	// rejected for a reason other than the one the fixture names.
-	CheckExceptions bool
 	// ExecWorkers, when non-zero, sets the executor's worker count.
 	ExecWorkers int
 	// ExecutionPathReporter, when set, is told how each block is executed.
@@ -420,8 +417,6 @@ func (bt *BlockTest) insertBlocks(m *execmoduletester.ExecModuleTester) ([]btBlo
 		cb, err := b.decode()
 		if err != nil {
 			if b.BlockHeader == nil {
-				// No exception mapping names decoder errors, so a block that
-				// fails to decode counts as rejected without a reason check.
 				continue // OK - block is supposed to be invalid, continue with next block
 			} else {
 				return nil, fmt.Errorf("block RLP decoding failed when expected to succeed: %w", err)
@@ -444,11 +439,6 @@ func (bt *BlockTest) insertBlocks(m *execmoduletester.ExecModuleTester) ([]btBlo
 		err1 := m.InsertChain(chain)
 		if err1 != nil {
 			if b.BlockHeader == nil {
-				if bt.CheckExceptions {
-					if err := checkException(b.ExpectException, err1); err != nil {
-						return nil, fmt.Errorf("block (index %d): %w", bi, err)
-					}
-				}
 				continue // OK - block is supposed to be invalid, continue with next block
 			} else {
 				return nil, fmt.Errorf("block #%v insertion into chain failed: %w", cb.Number(), err1)

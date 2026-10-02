@@ -44,7 +44,6 @@ var blockTestCommand = cli.Command{
 	ArgsUsage: "<path>...",
 	Flags: []cli.Flag{
 		&BALReportFlag,
-		&CheckExceptionsFlag,
 		&DumpFlag,
 		&ExecSerialFlag,
 		&JSONOutputFlag,
@@ -264,7 +263,6 @@ func runBlockTest(ctx *cli.Command, fname string, filter testFilter, reportPath 
 			continue
 		}
 
-		tests[name].CheckExceptions = ctx.Bool(CheckExceptionsFlag.Name)
 		if ctx.Bool(ExecSerialFlag.Name) {
 			tests[name].ExecWorkers = 1
 		}
