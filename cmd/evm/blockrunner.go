@@ -247,35 +247,52 @@ func runBlockTest(ctx *cli.Command, fname string, filter testFilter, reportPath 
 	if err != nil {
 		return nil, err
 	}
-
-	var tests map[string]*testutil.BlockTest
-	if err := json.Unmarshal(src, &tests); err != nil {
+	names, fixtures, err := splitFixtures(src)
+	if err != nil {
 		return nil, err
 	}
 
-	// Pull out keys to sort and ensure tests are run in order
-	keys := slices.Sorted(maps.Keys(tests))
-
-	// Run all the tests
-	results := make([]testResult, 0, len(keys))
-	for _, name := range keys {
+	results := make([]testResult, 0, len(names))
+	for _, name := range names {
 		if !filter.includeCase(fname, name) {
+			continue
+		}
+		test := new(testutil.BlockTest)
+		if err := json.Unmarshal(fixtures[name], test); err != nil {
+			results = append(results, unreadableFixture(name, err))
 			continue
 		}
 
 		if ctx.Bool(ExecSerialFlag.Name) {
-			tests[name].ExecWorkers = 1
+			test.ExecWorkers = 1
 		}
-		tests[name].ExecutionPathReporter = reportPath
+		test.ExecutionPathReporter = reportPath
 		result := &testResult{Name: name, Pass: true}
-		if err := tests[name].RunCLI(); err != nil {
+		if err := test.RunCLI(); err != nil {
 			result.Pass = false
 			result.Error = err.Error()
 		}
-		result.Rejections = rejections(tests[name].Rejections)
+		result.Rejections = rejections(test.Rejections)
 
 		results = append(results, *result)
 	}
 
 	return results, nil
+}
+
+// splitFixtures splits a fixture file into each fixture's JSON, keyed by name,
+// and returns the names sorted, the order the runners run them in. Each
+// fixture is decoded on its own, so one that cannot be decoded fails alone; a
+// file that is not a JSON object is an error.
+func splitFixtures(src []byte) ([]string, map[string]json.RawMessage, error) {
+	var fixtures map[string]json.RawMessage
+	if err := json.Unmarshal(src, &fixtures); err != nil {
+		return nil, nil, err
+	}
+	return slices.Sorted(maps.Keys(fixtures)), fixtures, nil
+}
+
+// unreadableFixture is the result of a fixture that failed to decode.
+func unreadableFixture(name string, err error) testResult {
+	return testResult{Name: name, Error: err.Error(), Rejections: rejections(nil)}
 }
