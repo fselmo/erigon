@@ -18,6 +18,9 @@ package main
 
 import (
 	"encoding/json"
+	"maps"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -86,6 +89,79 @@ func TestRunnersRejectMissingPathArgument(t *testing.T) {
 			require.NotEqual(t, 0, tt.ExitStatus())
 			require.Empty(t, stdout)
 			require.Contains(t, tt.StderrText(), "does-not-exist.json")
+		})
+	}
+}
+
+// A fixture that cannot be decoded fails on its own with the decoder's error;
+// the other fixtures in its file run as usual.
+func TestRunnersRunFixturesBesideAnUnreadableOne(t *testing.T) {
+	if testing.Short() {
+		t.Skip("too slow for testing.Short")
+	}
+	for _, tc := range []struct {
+		command string
+		fixture string
+	}{
+		{"blocktest", "../../execution/tests/testdata/delivered_access_list/valid.json"},
+		{"enginetest", "../../execution/tests/testdata/engine/bal_cross_block_ripemd160_state_leak.json"},
+	} {
+		t.Run(tc.command, func(t *testing.T) {
+			data, err := os.ReadFile(tc.fixture)
+			require.NoError(t, err)
+			var fixtures map[string]map[string]any
+			require.NoError(t, json.Unmarshal(data, &fixtures))
+			require.Len(t, fixtures, 1)
+			var fixture map[string]any
+			for _, f := range fixtures {
+				fixture = f
+			}
+			unreadable := maps.Clone(fixture)
+			unreadable["genesisBlockHeader"] = map[string]any{"gasLimit": "0xzz"}
+			data, err = json.Marshal(map[string]any{"a": fixture, "b": unreadable, "c": fixture})
+			require.NoError(t, err)
+			path := filepath.Join(t.TempDir(), "batch.json")
+			require.NoError(t, os.WriteFile(path, data, 0o644))
+
+			tt := cmdtest.NewTestCmd(t, nil)
+			tt.Run("evm-test", tc.command, "--jsonout", path)
+			stdout := tt.Output()
+			tt.WaitExit()
+			require.Equal(t, 0, tt.ExitStatus(), tt.StderrText())
+
+			var results []testResult
+			require.NoError(t, json.Unmarshal(stdout, &results))
+			require.Len(t, results, 3)
+			for i, name := range []string{"a", "b", "c"} {
+				r := results[i]
+				require.Equal(t, name, r.Name)
+				require.NotNil(t, r.Rejections, name)
+				require.Empty(t, *r.Rejections, name)
+				if name == "b" {
+					require.False(t, r.Pass)
+					require.Contains(t, r.Error, `invalid hex or decimal integer "0xzz"`)
+					continue
+				}
+				require.True(t, r.Pass, r.Error)
+			}
+		})
+	}
+}
+
+// A fixture file that is not a JSON object fails the run.
+func TestRunnersRejectFixtureFileThatIsNotAnObject(t *testing.T) {
+	for _, command := range []string{"blocktest", "enginetest"} {
+		t.Run(command, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "array.json")
+			require.NoError(t, os.WriteFile(path, []byte("[1,2]"), 0o644))
+
+			tt := cmdtest.NewTestCmd(t, nil)
+			tt.Run("evm-test", command, "--jsonout", path)
+			stdout := tt.Output()
+			tt.WaitExit()
+			require.NotEqual(t, 0, tt.ExitStatus())
+			require.Empty(t, stdout)
+			require.Contains(t, tt.StderrText(), "cannot unmarshal array")
 		})
 	}
 }
