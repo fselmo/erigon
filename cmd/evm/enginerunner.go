@@ -21,9 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"os"
-	"slices"
 
 	"github.com/urfave/cli/v3"
 
@@ -88,26 +86,31 @@ func runEngineTest(ctx *cli.Command, fname string, filter testFilter, reportPath
 	if err != nil {
 		return nil, err
 	}
-	var tests map[string]*engineapitester.EngineTest
-	if err := json.Unmarshal(src, &tests); err != nil {
+	names, fixtures, err := splitFixtures(src)
+	if err != nil {
 		return nil, fmt.Errorf("unmarshal %s: %w", fname, err)
 	}
 
-	results := make([]testResult, 0, len(tests))
-	for _, name := range slices.Sorted(maps.Keys(tests)) {
+	results := make([]testResult, 0, len(names))
+	for _, name := range names {
 		if !filter.includeCase(fname, name) {
 			continue
 		}
-		if ctx.Bool(ExecSerialFlag.Name) {
-			tests[name].ExecWorkers = 1
+		test := new(engineapitester.EngineTest)
+		if err := json.Unmarshal(fixtures[name], test); err != nil {
+			results = append(results, unreadableFixture(name, err))
+			continue
 		}
-		tests[name].ExecutionPathReporter = reportPath
+		if ctx.Bool(ExecSerialFlag.Name) {
+			test.ExecWorkers = 1
+		}
+		test.ExecutionPathReporter = reportPath
 		result := testResult{Name: name, Pass: true}
-		if err := tests[name].RunCLI(); err != nil {
+		if err := test.RunCLI(); err != nil {
 			result.Pass = false
 			result.Error = err.Error()
 		}
-		result.Rejections = rejections(tests[name].Rejections)
+		result.Rejections = rejections(test.Rejections)
 		results = append(results, result)
 	}
 	return results, nil
