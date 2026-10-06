@@ -29,6 +29,7 @@ import (
 
 	"github.com/urfave/cli/v3"
 
+	_ "github.com/erigontech/erigon/cmd/evm/internal/stderrlog" // before any package logs
 	"github.com/erigontech/erigon/cmd/evm/internal/t8ntool"
 	"github.com/erigontech/erigon/cmd/utils/flags"
 	"github.com/erigontech/erigon/common/log/v3"
@@ -151,6 +152,14 @@ var (
 		Value: 1,
 		Usage: "Number of workers to execute tests in parallel (must be >= 1)",
 	}
+	BALReportFlag = cli.BoolFlag{
+		Name:  "bal-report",
+		Usage: "Print how each block was executed (parallel or sequential, and why) as one JSON line per block on stderr",
+	}
+	ExecSerialFlag = cli.BoolFlag{
+		Name:  "exec.serial",
+		Usage: "Execute every block on a single exec worker, as the node's --exec.serial does",
+	}
 	JSONOutputFlag = cli.BoolFlag{
 		Name:  "jsonout",
 		Usage: "Output results as JSON array instead of human-readable format",
@@ -211,6 +220,7 @@ func init() {
 		&disasmCommand,
 		&runCommand,
 		&blockTestCommand,
+		&engineTestCommand,
 		&engineXTestCommand,
 		&zkevmTestCommand,
 		&stateTestCommand,

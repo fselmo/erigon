@@ -34,15 +34,18 @@ import (
 
 	"github.com/erigontech/erigon/common/log/v3"
 	"github.com/erigontech/erigon/execution/tests/testutil"
+	"github.com/erigontech/erigon/node/ethconfig"
 )
 
 var blockTestCommand = cli.Command{
 	Action:    blockTestCmd,
 	Name:      "blocktest",
-	Usage:     "Executes the given blockchain tests. Filenames can be fed via standard input (batch mode) or as an argument (one-off execution).",
-	ArgsUsage: "<path>",
+	Usage:     "Executes the given blockchain tests. Paths (files or directories) are given as arguments, or filenames fed via standard input (batch mode).",
+	ArgsUsage: "<path>...",
 	Flags: []cli.Flag{
+		&BALReportFlag,
 		&DumpFlag,
+		&ExecSerialFlag,
 		&JSONOutputFlag,
 		&RunFlag,
 		&ExcludeFlag,
@@ -52,8 +55,6 @@ var blockTestCommand = cli.Command{
 }
 
 func blockTestCmd(_ context.Context, ctx *cli.Command) error {
-	path := ctx.Args().First()
-
 	// Set up logging
 	if ctx.Int(VerbosityFlag.Name) > 0 {
 		log.Root().SetHandler(log.LvlFilterHandler(log.Lvl(ctx.Int(VerbosityFlag.Name)), log.StderrHandler))
@@ -70,9 +71,14 @@ func blockTestCmd(_ context.Context, ctx *cli.Command) error {
 		return err
 	}
 
-	if len(path) != 0 {
-		collected := filter.filterFiles(collectFiles(path))
-		results, err := runBlockTestsParallel(ctx, collected, workers, filter)
+	reportPath := runnerExecutionPathReporter(ctx)
+	if ctx.Args().Present() {
+		files, err := collectArgFiles(ctx)
+		if err != nil {
+			return err
+		}
+		collected := filter.filterFiles(files)
+		results, err := runBlockTestsParallel(ctx, collected, workers, filter, reportPath)
 		if err != nil {
 			return err
 		}
@@ -86,7 +92,7 @@ func blockTestCmd(_ context.Context, ctx *cli.Command) error {
 		if len(fname) == 0 {
 			return nil
 		}
-		results, err := runBlockTest(ctx, fname, filter)
+		results, err := runBlockTest(ctx, fname, filter, reportPath)
 		if err != nil {
 			return err
 		}
@@ -102,9 +108,9 @@ type fileResult struct {
 	err     error
 }
 
-func runBlockTestsParallel(ctx *cli.Command, files []string, workers uint64, filter testFilter) ([]testResult, error) {
+func runBlockTestsParallel(ctx *cli.Command, files []string, workers uint64, filter testFilter, reportPath func(ethconfig.BlockExecutionPath)) ([]testResult, error) {
 	return runTestFilesParallel(files, workers, func(path string) ([]testResult, error) {
-		return runBlockTest(ctx, path, filter)
+		return runBlockTest(ctx, path, filter, reportPath)
 	})
 }
 
@@ -168,18 +174,51 @@ func runTestFilesParallel(files []string, workers uint64, runner func(string) ([
 	return results, nil
 }
 
+// collectArgFiles returns the fixture files under every path argument, in
+// argument order. A path that does not exist or cannot be read is an error,
+// returned before any fixture runs.
+func collectArgFiles(ctx *cli.Command) ([]string, error) {
+	files := make([]string, 0, ctx.Args().Len())
+	for _, path := range ctx.Args().Slice() {
+		found, err := jsonFiles(path)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, found...)
+	}
+	for _, path := range files {
+		f, err := os.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		f.Close()
+	}
+	return files, nil
+}
+
 // collectFiles walks the given path and returns all JSON files.
 // If path is a file, it returns that file directly.
 func collectFiles(path string) []string {
-	info, err := os.Stat(path)
-	if err != nil {
+	if _, err := os.Stat(path); err != nil {
 		return nil
 	}
-
-	if !info.IsDir() {
-		return []string{path}
+	out, err := jsonFiles(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error walking path %s: %v\n", path, err)
 	}
+	return out
+}
 
+// jsonFiles returns path if it is a file, or the JSON files under it if it is
+// a directory, with the error that stopped the walk, if any.
+func jsonFiles(path string) ([]string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		return []string{path}, nil
+	}
 	// Pre-allocate with a reasonable estimate to avoid repeated slice growth
 	out := make([]string, 0, 256)
 	err = filepath.WalkDir(path, func(path string, d os.DirEntry, err error) error {
@@ -191,42 +230,60 @@ func collectFiles(path string) []string {
 		}
 		return nil
 	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error walking path %s: %v\n", path, err)
-	}
-
-	return out
+	return out, err
 }
 
-func runBlockTest(ctx *cli.Command, fname string, filter testFilter) ([]testResult, error) {
+func runBlockTest(ctx *cli.Command, fname string, filter testFilter, reportPath func(ethconfig.BlockExecutionPath)) ([]testResult, error) {
 	src, err := os.ReadFile(fname)
 	if err != nil {
 		return nil, err
 	}
-
-	var tests map[string]*testutil.BlockTest
-	if err := json.Unmarshal(src, &tests); err != nil {
+	names, fixtures, err := splitFixtures(src)
+	if err != nil {
 		return nil, err
 	}
 
-	// Pull out keys to sort and ensure tests are run in order
-	keys := slices.Sorted(maps.Keys(tests))
-
-	// Run all the tests
-	results := make([]testResult, 0, len(keys))
-	for _, name := range keys {
+	results := make([]testResult, 0, len(names))
+	for _, name := range names {
 		if !filter.includeCase(fname, name) {
 			continue
 		}
+		test := new(testutil.BlockTest)
+		if err := json.Unmarshal(fixtures[name], test); err != nil {
+			results = append(results, unreadableFixture(name, err))
+			continue
+		}
 
+		if ctx.Bool(ExecSerialFlag.Name) {
+			test.ExecWorkers = 1
+		}
+		test.ExecutionPathReporter = reportPath
 		result := &testResult{Name: name, Pass: true}
-		if err := tests[name].RunCLI(); err != nil {
+		if err := test.RunCLI(); err != nil {
 			result.Pass = false
 			result.Error = err.Error()
 		}
+		result.Rejections = rejections(test.Rejections)
 
 		results = append(results, *result)
 	}
 
 	return results, nil
+}
+
+// splitFixtures splits a fixture file into each fixture's JSON, keyed by name,
+// and returns the names sorted, the order the runners run them in. Each
+// fixture is decoded on its own, so one that cannot be decoded fails alone; a
+// file that is not a JSON object is an error.
+func splitFixtures(src []byte) ([]string, map[string]json.RawMessage, error) {
+	var fixtures map[string]json.RawMessage
+	if err := json.Unmarshal(src, &fixtures); err != nil {
+		return nil, nil, err
+	}
+	return slices.Sorted(maps.Keys(fixtures)), fixtures, nil
+}
+
+// unreadableFixture is the result of a fixture that failed to decode.
+func unreadableFixture(name string, err error) testResult {
+	return testResult{Name: name, Error: err.Error(), Rejections: rejections(nil)}
 }

@@ -48,8 +48,8 @@ import (
 var stateTestCommand = cli.Command{
 	Action:    stateTestCmd,
 	Name:      "statetest",
-	Usage:     "Executes the given state tests. Filenames can be fed via standard input (batch mode) or as an argument (one-off execution).",
-	ArgsUsage: "<file>",
+	Usage:     "Executes the given state tests. Paths (files or directories) are given as arguments, or filenames fed via standard input (batch mode).",
+	ArgsUsage: "<path>...",
 	Flags: []cli.Flag{
 		&BenchFlag,
 		&DebugFlag,
@@ -109,9 +109,12 @@ func stateTestCmd(_ context.Context, ctx *cli.Command) error {
 		return err
 	}
 
-	path := ctx.Args().First()
-	if len(path) != 0 {
-		collected := filter.filterFiles(collectFiles(path))
+	if ctx.Args().Present() {
+		files, err := collectArgFiles(ctx)
+		if err != nil {
+			return err
+		}
+		collected := filter.filterFiles(files)
 		results, err := runStateTestsParallel(ctx, cfg, traceOut, collected, workers, filter)
 		if err != nil {
 			return err

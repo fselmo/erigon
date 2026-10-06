@@ -315,4 +315,23 @@ type Sync struct {
 	SnapshotDownloadToBlock  uint64 // exclusive [0,toBlock)
 
 	SlowBlockThreshold *time.Duration
+
+	// ExecutionPathReporter, when set, is called for each block the executor
+	// runs, with the path it runs on. Test runners set it; a node leaves it nil.
+	ExecutionPathReporter func(BlockExecutionPath) `toml:"-"`
+}
+
+// BlockExecutionPath says how the executor runs one block.
+type BlockExecutionPath struct {
+	Number uint64
+	Hash   common.Hash
+	// Path is "parallel" or "sequential".
+	Path string
+	// Reason is "single-worker" when the block runs on one exec worker, as
+	// under --exec.serial, and empty for "parallel". The block test runner
+	// sets "bad-access-list" when it dropped the block's list.
+	Reason string
+	// AccessList is true when the block's access list seeds the parallel
+	// scheduler; without it, transactions are scheduled optimistically.
+	AccessList bool
 }

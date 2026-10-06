@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"sync"
 	"testing"
 
 	"github.com/holiman/uint256"
@@ -47,6 +48,7 @@ import (
 	"github.com/erigontech/erigon/execution/tests/testforks"
 	"github.com/erigontech/erigon/execution/types"
 	"github.com/erigontech/erigon/execution/types/accounts"
+	"github.com/erigontech/erigon/node/ethconfig"
 	"github.com/erigontech/erigon/node/rulesconfig"
 	"github.com/erigontech/erigon/p2p/protocols/eth"
 )
@@ -56,6 +58,30 @@ type BlockTest struct {
 	json            btJSON
 	br              dbservices.FullBlockReader
 	ExperimentalBAL bool
+	// ExecWorkers, when non-zero, sets the executor's worker count.
+	ExecWorkers int
+	// ExecutionPathReporter, when set, is told how each block is executed.
+	ExecutionPathReporter func(ethconfig.BlockExecutionPath)
+	// Rejections lists the blocks the client rejected in the last run, in
+	// fixture order, each with the client's own error.
+	Rejections []Rejection
+	// droppedAccessLists holds the hashes of blocks whose delivered access
+	// list was dropped, so their reports read "bad-access-list".
+	droppedAccessLists sync.Map
+}
+
+// A Rejection is a block or payload the client rejected. Index is its
+// position in the fixture's blocks or engineNewPayloads, and Error is the
+// client's error, unmapped; checking it against the fixture's expected
+// exception is left to the consumer.
+type Rejection struct {
+	Index int          `json:"index"`
+	Hash  *common.Hash `json:"hash,omitempty"`
+	Error string       `json:"error"`
+}
+
+func (bt *BlockTest) reject(index int, hash *common.Hash, err string) {
+	bt.Rejections = append(bt.Rejections, Rejection{Index: index, Hash: hash, Error: err})
 }
 
 // UnmarshalJSON implements json.Unmarshaler interface.
@@ -79,6 +105,36 @@ type btBlock struct {
 	Rlp             string
 	UncleHeaders    []*btHeader
 	BlockAccessList btBlockAccessList `json:"blockAccessList"`
+	// RlpDecoded carries an expected-invalid block's fields, which have no
+	// top-level copy; only its access list is read.
+	RlpDecoded *struct {
+		BlockAccessList btBlockAccessList `json:"blockAccessList"`
+	} `json:"rlp_decoded"`
+}
+
+// accessList returns the block's access list as a client would receive it:
+// the top-level field, or rlp_decoded's for an expected-invalid block. Like
+// the p2p fetcher's validateBALResponse, it drops a list whose hash differs
+// from the header's, so the block runs without one and is judged on its
+// header; dropped reports that. A list the header commits to is attached
+// even if malformed, and the block is then invalid.
+func (bb *btBlock) accessList(header *types.Header) (sidecar *types.BlockAccessListSidecar, dropped bool) {
+	list := bb.BlockAccessList
+	if len(list) == 0 && bb.RlpDecoded != nil {
+		list = bb.RlpDecoded.BlockAccessList
+	}
+	sidecar = types.NewBlockAccessListSidecar(list.toBAL())
+	if sidecar == nil {
+		return nil, false
+	}
+	if header.BlockAccessListHash == nil {
+		return nil, true
+	}
+	hash, err := sidecar.Hash()
+	if err != nil || hash != *header.BlockAccessListHash {
+		return nil, true
+	}
+	return sidecar, false
 }
 
 // btBlockAccessList and related types for parsing block access list data from test JSON.
@@ -235,21 +291,25 @@ func (bt *BlockTest) newTester(tb testing.TB) (*execmoduletester.ExecModuleTeste
 	if bt.ExperimentalBAL {
 		mOpts = append(mOpts, execmoduletester.WithExperimentalBAL())
 	}
+	if bt.ExecWorkers > 0 {
+		mOpts = append(mOpts, execmoduletester.WithExecWorkers(bt.ExecWorkers))
+	}
+	if report := bt.ExecutionPathReporter; report != nil {
+		mOpts = append(mOpts, execmoduletester.WithExecutionPathReporter(func(p ethconfig.BlockExecutionPath) {
+			if _, dropped := bt.droppedAccessLists.Load(p.Hash); dropped {
+				p.Reason = "bad-access-list"
+			}
+			report(p)
+		}))
+	}
 	return execmoduletester.New(tb, mOpts...), nil
 }
 
 // runChecks imports the test blocks into m and validates the result against the
 // fixture (genesis, head block hash, post-state, imported headers).
 func (bt *BlockTest) runChecks(m *execmoduletester.ExecModuleTester) error {
-	bt.br = m.BlockReader
-	// import pre accounts & construct test genesis block & state root
-	genesisHash := m.Genesis.Hash()
-	if genesisHash != bt.json.Genesis.Hash {
-		return fmt.Errorf("genesis block hash doesn't match test: computed=%x, test=%x", genesisHash[:6], bt.json.Genesis.Hash[:6])
-	}
-	genesisRoot := m.Genesis.Root()
-	if genesisRoot != bt.json.Genesis.StateRoot {
-		return fmt.Errorf("genesis block state root does not match test: computed=%x, test=%x", genesisRoot[:6], bt.json.Genesis.StateRoot[:6])
+	if err := bt.validateGenesis(m); err != nil {
+		return err
 	}
 
 	validBlocks, err := bt.insertBlocks(m)
@@ -263,6 +323,30 @@ func (bt *BlockTest) runChecks(m *execmoduletester.ExecModuleTester) error {
 	}
 	defer tx.Rollback()
 
+	if err := bt.validateHeadAndPostState(m, tx); err != nil {
+		return err
+	}
+	return bt.validateImportedHeaders(tx, validBlocks, m)
+}
+
+// validateGenesis checks the genesis m built from the test against the test's
+// genesis header.
+func (bt *BlockTest) validateGenesis(m *execmoduletester.ExecModuleTester) error {
+	bt.br = m.BlockReader
+	genesisHash := m.Genesis.Hash()
+	if genesisHash != bt.json.Genesis.Hash {
+		return fmt.Errorf("genesis block hash doesn't match test: computed=%x, test=%x", genesisHash[:6], bt.json.Genesis.Hash[:6])
+	}
+	genesisRoot := m.Genesis.Root()
+	if genesisRoot != bt.json.Genesis.StateRoot {
+		return fmt.Errorf("genesis block state root does not match test: computed=%x, test=%x", genesisRoot[:6], bt.json.Genesis.StateRoot[:6])
+	}
+	return nil
+}
+
+// validateHeadAndPostState checks the head block hash and the post-state
+// accounts against the test.
+func (bt *BlockTest) validateHeadAndPostState(m *execmoduletester.ExecModuleTester, tx kv.TemporalTx) error {
 	cmlast := rawdb.ReadHeadBlockHash(tx)
 	if common.Hash(bt.json.BestBlock) != cmlast {
 		return fmt.Errorf("last block hash validation mismatch: want: %x, have: %x", bt.json.BestBlock, cmlast)
@@ -271,8 +355,7 @@ func (bt *BlockTest) runChecks(m *execmoduletester.ExecModuleTester) error {
 	if err := bt.validatePostState(newDB); err != nil {
 		return fmt.Errorf("post state validation failed: %w", err)
 	}
-
-	return bt.validateImportedHeaders(tx, validBlocks, m)
+	return nil
 }
 
 // RunWithTester runs the block test and returns the ExecModuleTester it built.
@@ -306,6 +389,29 @@ func (bt *BlockTest) RunCLI() error {
 		defer m.Close()
 	}
 	return err
+}
+
+// RunCLIWith is RunCLI with deliver bringing the chain into the fresh
+// execution module in place of the test's blocks. The genesis, head block and
+// post-state are checked as in RunCLI.
+func (bt *BlockTest) RunCLIWith(deliver func(m *execmoduletester.ExecModuleTester) error) error {
+	m, err := bt.newTester(nil)
+	if err != nil {
+		return err
+	}
+	defer m.Close()
+	if err := bt.validateGenesis(m); err != nil {
+		return err
+	}
+	if err := deliver(m); err != nil {
+		return err
+	}
+	tx, err := m.DB.BeginTemporalRo(m.Ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	return bt.validateHeadAndPostState(m, tx)
 }
 
 func (bt *BlockTest) genesis(config *chain.Config) *types.Genesis {
@@ -346,22 +452,24 @@ See https://github.com/ethereum/tests/wiki/Blockchain-Tests-II
 */
 func (bt *BlockTest) insertBlocks(m *execmoduletester.ExecModuleTester) ([]btBlock, error) {
 	validBlocks := make([]btBlock, 0)
+	bt.Rejections = []Rejection{}
 	// insert the test blocks, which will execute all transaction
 	for bi, b := range bt.json.Blocks {
 		cb, err := b.decode()
 		if err != nil {
+			bt.reject(bi, nil, err.Error())
 			if b.BlockHeader == nil {
 				continue // OK - block is supposed to be invalid, continue with next block
 			} else {
 				return nil, fmt.Errorf("block RLP decoding failed when expected to succeed: %w", err)
 			}
 		}
-		var bal types.BlockAccessList
-		if len(b.BlockAccessList) > 0 {
-			bal = b.BlockAccessList.toBAL()
-		}
 		// RLP decoding worked, try to insert into chain:
-		cb = types.NewBlockFromNetwork(cb.HeaderNoCopy(), cb.Body(), types.NewBlockAccessListSidecar(bal))
+		accessList, dropped := b.accessList(cb.HeaderNoCopy())
+		cb = types.NewBlockFromNetwork(cb.HeaderNoCopy(), cb.Body(), accessList)
+		if dropped {
+			bt.droppedAccessLists.Store(cb.Hash(), struct{}{})
+		}
 		chain := &blockgen.ChainPack{Blocks: []*types.Block{cb}, Headers: []*types.Header{cb.Header()}, TopBlock: cb}
 		var previousHead *types.Header
 		if b.BlockHeader == nil {
@@ -372,6 +480,8 @@ func (bt *BlockTest) insertBlocks(m *execmoduletester.ExecModuleTester) ([]btBlo
 		}
 		err1 := m.InsertChain(chain)
 		if err1 != nil {
+			hash := cb.Hash()
+			bt.reject(bi, &hash, err1.Error())
 			if b.BlockHeader == nil {
 				continue // OK - block is supposed to be invalid, continue with next block
 			} else {
@@ -386,11 +496,13 @@ func (bt *BlockTest) insertBlocks(m *execmoduletester.ExecModuleTester) ([]btBlo
 			if isCanonical && !m.ChainConfig.IsByzantium(cb.NumberU64()) {
 				// Staged execution does not retain the per-transaction post-state roots needed
 				// for legacy receipt tries, so use the slower receipt generator to reconstruct them.
-				validReceipts, err := bt.validatePreByzantiumReceipts(m, cb)
+				receiptsErr, err := bt.validatePreByzantiumReceipts(m, cb)
 				if err != nil {
 					return nil, err
 				}
-				if !validReceipts {
+				if receiptsErr != nil {
+					hash := cb.Hash()
+					bt.reject(bi, &hash, receiptsErr.Error())
 					if err := restoreForkChoice(m, previousHead.Hash()); err != nil {
 						return nil, err
 					}
@@ -411,17 +523,23 @@ func (bt *BlockTest) insertBlocks(m *execmoduletester.ExecModuleTester) ([]btBlo
 	return validBlocks, nil
 }
 
-func (bt *BlockTest) validatePreByzantiumReceipts(m *execmoduletester.ExecModuleTester, block *types.Block) (bool, error) {
+// validatePreByzantiumReceipts returns, as invalid, the receipt root mismatch
+// in the words of erigon's own receipt check, or nil if the root matches.
+func (bt *BlockTest) validatePreByzantiumReceipts(m *execmoduletester.ExecModuleTester, block *types.Block) (invalid error, err error) {
 	tx, err := m.DB.BeginTemporalRo(m.Ctx)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	defer tx.Rollback()
 	receipts, err := m.ReceiptsReader.GetReceipts(m.Ctx, m.ChainConfig, tx, block, eth.ReceiptsOpts{})
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	return types.DeriveSha(receipts) == block.ReceiptHash(), nil
+	if receiptHash := types.DeriveSha(receipts); receiptHash != block.ReceiptHash() {
+		return fmt.Errorf("receiptHash mismatch: %x != %x, headerNum=%d, %x",
+			receiptHash, block.ReceiptHash(), block.NumberU64(), block.Hash()), nil
+	}
+	return nil, nil
 }
 
 func restoreForkChoice(m *execmoduletester.ExecModuleTester, headHash common.Hash) error {
