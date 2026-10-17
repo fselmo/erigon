@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -34,7 +35,6 @@ func TestExecutionPathReporterLines(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		sequential bool
-		withheld   bool
 		path       ethconfig.BlockExecutionPath
 		want       string
 	}{
@@ -66,28 +66,15 @@ func TestExecutionPathReporterLines(t *testing.T) {
 			want: `{"event":"balExecution","block":12,"hash":"0x0000000000000000000000000000000000000000000000000000000000abcdef","path":"sequential","reason":"single-worker","scheduler":"bal"}`,
 		},
 		{
-			name:     "parallel under --bal-withhold",
-			withheld: true,
-			path:     ethconfig.BlockExecutionPath{Number: 12, Hash: hash, Path: "parallel"},
-			want:     `{"event":"balExecution","block":12,"hash":"0x0000000000000000000000000000000000000000000000000000000000abcdef","path":"parallel","reason":"withheld","scheduler":"optimistic"}`,
-		},
-		{
-			name:       "single worker under --bal-withhold and --bal-sequential",
+			name:       "withheld access list under --bal-sequential",
 			sequential: true,
-			withheld:   true,
-			path:       ethconfig.BlockExecutionPath{Number: 12, Hash: hash, Path: "sequential", Reason: "single-worker"},
+			path:       ethconfig.BlockExecutionPath{Number: 12, Hash: hash, Path: "sequential", Reason: "withheld"},
 			want:       `{"event":"balExecution","block":12,"hash":"0x0000000000000000000000000000000000000000000000000000000000abcdef","path":"sequential","reason":"withheld","scheduler":"optimistic"}`,
-		},
-		{
-			name:     "dropped access list under --bal-withhold",
-			withheld: true,
-			path:     ethconfig.BlockExecutionPath{Number: 12, Hash: hash, Path: "parallel", Reason: "bad-access-list"},
-			want:     `{"event":"balExecution","block":12,"hash":"0x0000000000000000000000000000000000000000000000000000000000abcdef","path":"parallel","reason":"withheld","scheduler":"optimistic"}`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var out bytes.Buffer
-			executionPathReporter(&out, tc.sequential, tc.withheld)(tc.path)
+			executionPathReporter(&out, tc.sequential)(tc.path)
 			require.Equal(t, tc.want+"\n", out.String())
 		})
 	}
@@ -157,22 +144,29 @@ func TestBALReportFlag(t *testing.T) {
 }
 
 // Under --bal-withhold, blocktest runs every block without its delivered
-// access list, on either executor, and the fixture still passes.
+// access list, on either executor, and the fixture still passes. Only a block
+// delivered with a list reports withheld; one without keeps its usual reason.
 func TestBALWithholdFlag(t *testing.T) {
 	if testing.Short() {
 		t.Skip("too slow for testing.Short")
 	}
-	const fixture = "../../execution/tests/testdata/delivered_access_list/valid.json"
+	const (
+		withList    = "../../execution/tests/testdata/delivered_access_list/valid.json"
+		withoutList = "../../execution/tests/testdata/missing_eest_coverage/reverted_storage_read_after_recreate_has_correct_bal_hash_github_issue_23407.json"
+	)
 	for _, tc := range []struct {
-		flags []string
-		want  string
+		fixture string
+		flags   []string
+		want    string
 	}{
-		{nil, `"path":"parallel","reason":"","scheduler":"bal"`},
-		{[]string{"--bal-withhold"}, `"path":"parallel","reason":"withheld","scheduler":"optimistic"`},
-		{[]string{"--bal-withhold", "--bal-sequential"}, `"path":"sequential","reason":"withheld","scheduler":"optimistic"`},
+		{withList, nil, `"path":"parallel","reason":"","scheduler":"bal"`},
+		{withList, []string{"--bal-withhold"}, `"path":"parallel","reason":"withheld","scheduler":"optimistic"`},
+		{withList, []string{"--bal-withhold", "--bal-sequential"}, `"path":"sequential","reason":"withheld","scheduler":"optimistic"`},
+		{withoutList, []string{"--bal-withhold"}, `"path":"parallel","reason":"","scheduler":"optimistic"`},
+		{withoutList, []string{"--bal-withhold", "--bal-sequential"}, `"path":"sequential","reason":"disabled","scheduler":"optimistic"`},
 	} {
-		t.Run(fmt.Sprintf("%v", tc.flags), func(t *testing.T) {
-			lines := balExecutionLines(t, "blocktest", fixture, append(tc.flags, "--bal-report")...)
+		t.Run(fmt.Sprintf("%s %v", filepath.Base(tc.fixture), tc.flags), func(t *testing.T) {
+			lines := balExecutionLines(t, "blocktest", tc.fixture, append(tc.flags, "--bal-report")...)
 			require.Len(t, lines, 1)
 			require.Contains(t, lines[0], tc.want)
 		})

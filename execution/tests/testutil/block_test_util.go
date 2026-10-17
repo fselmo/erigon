@@ -33,6 +33,7 @@ import (
 	jsoniter "github.com/json-iterator/go"
 
 	"github.com/erigontech/erigon/common"
+	"github.com/erigontech/erigon/common/dbg"
 	"github.com/erigontech/erigon/common/hexutil"
 	"github.com/erigontech/erigon/common/log/v3"
 	"github.com/erigontech/erigon/common/math"
@@ -61,8 +62,10 @@ type BlockTest struct {
 	ExecWorkers           int
 	ExecutionPathReporter func(ethconfig.BlockExecutionPath)
 	// Rejections lists the blocks the last run rejected, in fixture order.
-	Rejections         []Rejection
-	droppedAccessLists sync.Map
+	Rejections []Rejection
+	// deliveredAccessLists maps each block delivered with a list to whether
+	// that list was dropped.
+	deliveredAccessLists sync.Map
 }
 
 // A Rejection is a block or payload the client rejected, at its index in the
@@ -285,8 +288,14 @@ func (bt *BlockTest) newTester(tb testing.TB) (*execmoduletester.ExecModuleTeste
 	}
 	if report := bt.ExecutionPathReporter; report != nil {
 		mOpts = append(mOpts, execmoduletester.WithExecutionPathReporter(func(p ethconfig.BlockExecutionPath) {
-			if _, dropped := bt.droppedAccessLists.Load(p.Hash); dropped {
-				p.Reason = "bad-access-list"
+			// A block delivered without a list keeps the executor's reason.
+			if dropped, delivered := bt.deliveredAccessLists.Load(p.Hash); delivered {
+				switch {
+				case dbg.IgnoreBAL:
+					p.Reason = "withheld"
+				case dropped.(bool):
+					p.Reason = "bad-access-list"
+				}
 			}
 			report(p)
 		}))
@@ -451,8 +460,8 @@ func (bt *BlockTest) insertBlocks(m *execmoduletester.ExecModuleTester) ([]btBlo
 		// RLP decoding worked, try to insert into chain:
 		accessList, dropped := b.accessList(cb.HeaderNoCopy())
 		cb = types.NewBlockFromNetwork(cb.HeaderNoCopy(), cb.Body(), accessList)
-		if dropped {
-			bt.droppedAccessLists.Store(cb.Hash(), struct{}{})
+		if accessList != nil || dropped {
+			bt.deliveredAccessLists.Store(cb.Hash(), dropped)
 		}
 		chain := &blockgen.ChainPack{Blocks: []*types.Block{cb}, Headers: []*types.Header{cb.Header()}, TopBlock: cb}
 		var previousHead *types.Header
